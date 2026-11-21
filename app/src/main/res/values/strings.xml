@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">CGeez RC</string>
+    <string name="a11y_desc">Lets CGeez RC read button presses from your Bluetooth remote so it can control your LG TV, even when the app is closed or the phone is locked. It does not read your screen.</string>
+</resources>
