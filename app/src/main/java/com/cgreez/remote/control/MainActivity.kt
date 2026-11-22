@@ -75,9 +75,9 @@ class MainActivity : Activity(), TvHub.Listener {
         Pal.apply(TvHub.themeDark, TvHub.themeAccent)
         window.statusBarColor = Pal.bg
         window.navigationBarColor = Pal.bg
-        applyBarIcons()
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         setContentView(buildUi())
+        applyBarIcons()
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
