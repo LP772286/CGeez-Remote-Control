@@ -14,7 +14,7 @@ An Android app that turns your phone into a background remote for **LG webOS TVs
 - **Keeps the phone screen off.** If a remote key wakes the phone, the app locks it again straight away (Android 9+).
 - **Real remote behavior**
   - Back: tap = Back, hold = Exit (sent once).
-  - OK: tap = OK (on release), hold = one hold event, never OK, OK, OK.
+  - OK: tap = OK (on release), hold = one hold event, never OK, OK, OK. Optional **real hold over Bluetooth** (Settings > OK hold): the phone pairs with the TV as a keyboard and a held OK is a true held key, so long-press menus open.
   - Arrows, volume and channel repeat while held.
 - **Reliable volume.** If the TV ignores the direct command, the same press is sent as a normal remote key.
 - **Program any button** to a TV key, an app launch or a command.
@@ -46,7 +46,7 @@ The APK is at `app/build/outputs/apk/debug/app-debug.apk`.
 - LG webOS TVs only.
 - The phone and TV must be on the same network.
 - The phone screen may flash for a moment when a remote key wakes it.
-- LG has no real "hold" message, so an OK hold is sent as one short burst of OK presses.
+- LG's Wi-Fi remote channel has no "key down / key up", so over Wi-Fi an OK hold can only be soft OK taps. For a real long press, turn on "Real hold over Bluetooth" in Settings and pair the phone to the TV as a keyboard (Android 9+).
 - With external speakers (ARC) or some HDMI inputs, volume uses plain remote keys instead of the direct command.
 - The connection to the TV skips certificate checks, because the TV uses a self-signed certificate. Use it only on your own home network.
 - The project is signed with the included debug keystore, so it is not tamper-proof.

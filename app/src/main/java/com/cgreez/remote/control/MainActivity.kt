@@ -40,6 +40,7 @@ class MainActivity : Activity(), TvHub.Listener {
 
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+    private val BT_PERMISSION_REQUEST = 2
 
     private lateinit var statusView: TextView
     private lateinit var connectView: View
@@ -57,6 +58,8 @@ class MainActivity : Activity(), TvHub.Listener {
     private lateinit var guardSwitch: Switch
     private lateinit var forceSwitch: Switch
     private lateinit var bannerView: TextView
+    private lateinit var btSwitch: Switch
+    private lateinit var btStatusView: TextView
     private var shownConnected: Boolean? = null
     private var shownApps = ""
     private var statusWanted = ""
@@ -82,6 +85,8 @@ class MainActivity : Activity(), TvHub.Listener {
     override fun onStart() {
         super.onStart()
         TvHub.listener = this
+        BtKeyboard.onChange = { refreshBtStatus() }
+        refreshBtStatus()
         applyKeepOn()
         onHubState()
         onHubApps()
@@ -93,8 +98,77 @@ class MainActivity : Activity(), TvHub.Listener {
 
     override fun onStop() {
         TvHub.listener = null
+        BtKeyboard.onChange = null
         TvHub.cancelCapture()
         super.onStop()
+    }
+
+    // ---- Real OK hold over Bluetooth ----
+    private fun setBtStatus(text: String) {
+        if (::btStatusView.isInitialized) btStatusView.text = text
+    }
+
+    private fun refreshBtStatus() {
+        if (!::btStatusView.isInitialized) return
+        btStatusView.text = "Bluetooth hold: ${BtKeyboard.status()}"
+        btStatusView.setTextColor(if (BtKeyboard.connected) Pal.accent else Pal.muted)
+        if (::btSwitch.isInitialized && btSwitch.isChecked != TvHub.okHoldBt) btSwitch.isChecked = TvHub.okHoldBt
+    }
+
+    /** Asks for the Bluetooth permissions Android 12+ needs. True when they are already granted. */
+    private fun ensureBtPermissions(): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return true
+        val need = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
+            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (need.isEmpty()) return true
+        requestPermissions(need.toTypedArray(), BT_PERMISSION_REQUEST)
+        return false
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == BT_PERMISSION_REQUEST) {
+            TvHub.startBt()
+            refreshBtStatus()
+        }
+    }
+
+    private fun makeBtVisible() {
+        if (!TvHub.okHoldBt) {
+            Toast.makeText(this, "Switch on \"Real hold over Bluetooth\" first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!ensureBtPermissions()) return
+        try {
+            startActivity(
+                Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                    .putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
+            )
+        } catch (e: Exception) {
+            Toast.makeText(this, "Couldn't open the Bluetooth visibility prompt. Open the phone's Bluetooth settings instead.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun pickBtDevice() {
+        if (!TvHub.okHoldBt) {
+            Toast.makeText(this, "Switch on \"Real hold over Bluetooth\" first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!ensureBtPermissions()) return
+        val devices = BtKeyboard.pairedDevices(this)
+        if (devices.isEmpty()) {
+            Toast.makeText(this, "No paired Bluetooth devices yet. Use \"Make phone visible\" and pair from the TV.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = devices.map { BtKeyboard.nameOf(it) }.toTypedArray()
+        dialogBuilder()
+            .setTitle("Connect to which device?")
+            .setItems(names) { _, which ->
+                BtKeyboard.connect(devices[which])
+                Toast.makeText(this, "Connecting to ${names[which]}...", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // Keys from the learned Bluetooth remote also work while this screen is open.
@@ -673,6 +747,39 @@ class MainActivity : Activity(), TvHub.Listener {
             paceRow.alpha = if (on) 1f else 0.45f
         }
         okCard.addView(repeatRow)
+
+        // Real hold over Bluetooth: the phone pairs with the TV as a keyboard.
+        val (btRow, btSw) = switchRow(
+            "Real hold over Bluetooth",
+            "Wi-Fi can only send OK taps, so the TV never sees a true long press. With this on, a held OK is sent as a real held key over Bluetooth, which opens long-press menus. Taps still use Wi-Fi.",
+            TvHub.okHoldBt
+        ) { on ->
+            TvHub.setOkHoldBt(on)
+            if (on && !ensureBtPermissions()) setBtStatus("Waiting for Bluetooth permission.")
+            refreshBtStatus()
+        }
+        btSwitch = btSw
+        okCard.addView(btRow, lp(MATCH, WRAP, 18))
+        btStatusView = label("", 12f, Pal.accent, true)
+        okCard.addView(btStatusView, lp(MATCH, WRAP, 10))
+        okCard.addView(
+            label(
+                "One-time setup: switch this on, tap \"Make phone visible\", then on the TV open its " +
+                    "Bluetooth settings, search for devices and choose this phone. Accept the pairing " +
+                    "request on both. If the TV is already paired, tap \"Connect a paired TV\" instead.",
+                12f, Pal.muted
+            ),
+            lp(MATCH, WRAP, 6)
+        )
+        val btRowButtons = LinearLayout(this)
+        btRowButtons.orientation = LinearLayout.HORIZONTAL
+        val visibleBtn = pillButton("Make phone visible", Pal.key, Pal.text, 42, 13f) { makeBtVisible() }
+        val connectBtn = pillButton("Connect a paired TV", Pal.key, Pal.text, 42, 13f) { pickBtDevice() }
+        val bp1 = LinearLayout.LayoutParams(0, WRAP, 1f)
+        bp1.rightMargin = dp(6)
+        btRowButtons.addView(visibleBtn, bp1)
+        btRowButtons.addView(connectBtn, LinearLayout.LayoutParams(0, WRAP, 1f))
+        okCard.addView(btRowButtons, lp(MATCH, WRAP, 12))
         col.addView(okCard, lp(MATCH, WRAP, 0, 14))
 
         // TV

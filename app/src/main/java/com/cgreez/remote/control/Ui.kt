@@ -236,10 +236,11 @@ fun Context.appTile(app: TvApp, sizeDp: Int, widthDp: Int, onClick: () -> Unit):
 /**
  * Round directional pad with OK in the middle. The arrow zones fire on touch and repeat while
  * held. OK is different: a quick tap sends one OK (on release), while holding past
- * [TvHub.okHoldMs] - Settings' "Hold sensitivity" - starts a hold: one soft OK by default, the
- * same as Back's hold sends one Exit, or, with Settings' "Keep sending OK while held" turned on
- * ([TvHub.okHoldRepeat]), OK resent every [TvHub.okHoldRepeatMs] for as long as the finger
- * stays down.
+ * [TvHub.okHoldMs] - Settings' "Hold sensitivity" - starts a hold: a real held Enter key over
+ * Bluetooth when Settings' Bluetooth hold is on and connected ([TvHub.okHoldBt]), otherwise one
+ * soft OK, the same as Back's hold sends one Exit, or, with Settings' "Keep sending OK while
+ * held" turned on ([TvHub.okHoldRepeat]), OK resent every [TvHub.okHoldRepeatMs] for as long as
+ * the finger stays down.
  */
 class DPadView(
     context: Context,
@@ -286,6 +287,8 @@ class DPadView(
 
     override fun onDetachedFromWindow() {
         rep.stop()
+        uiHandler.removeCallbacks(okHoldTask)
+        TvHub.okHoldEnd() // never leave a Bluetooth OK held down
         super.onDetachedFromWindow()
     }
 
@@ -353,13 +356,15 @@ class DPadView(
     private val okHoldTask = Runnable {
         okFired = true
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        TvHub.okHold()
-        // Off by default: a held OK is one soft press and nothing more, same as Back's hold
-        // sends one Exit. Only if "Keep sending OK while held" is on in Settings do we keep
-        // resending OK at the chosen pace, until the finger lifts or slides off OK, at which
+        // With Settings' Bluetooth hold on and the TV connected, this presses a real Enter key and
+        // keeps it down until the finger lifts (setZone calls TvHub.okHoldEnd), so the TV sees a
+        // true long press. Otherwise it's one soft Wi-Fi OK, same as Back's hold sends one Exit.
+        val realHold = TvHub.okHoldStart()
+        // Only for the Wi-Fi hold, and only if "Keep sending OK while held" is on in Settings: keep
+        // resending OK at the chosen pace until the finger lifts or slides off OK, at which
         // point setZone's rep.stop() below ends it - exactly how an arrow key's repeat is stopped.
-        if (TvHub.okHoldRepeat) {
-            rep.start(initialDelay = TvHub.okHoldRepeatMs, interval = TvHub.okHoldRepeatMs) { TvHub.okHold() }
+        if (!realHold && TvHub.okHoldRepeat) {
+            rep.start(initialDelay = TvHub.okHoldRepeatMs, interval = TvHub.okHoldRepeatMs) { TvHub.okHoldStart() }
         }
     }
 
@@ -371,7 +376,9 @@ class DPadView(
         uiHandler.removeCallbacks(okHoldTask)
         // OK works like Back: letting go quickly is a tap (OK, sent on release); holding it
         // starts a hold, which keeps resending OK (above) until the finger lets go.
-        if (was == zOk && !okFired) onKey("ENTER")
+        if (was == zOk) {
+            if (!okFired) onKey("ENTER") else TvHub.okHoldEnd()
+        }
         okFired = false
         invalidate()
         if (z == zOk) {

@@ -11,8 +11,8 @@ android {
         applicationId = "com.cgreez.remote.control"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "6.5"
+        versionCode = 11
+        versionName = "6.6"
     }
     // A fixed key checked into the repo, so every build is signed the same way and a new
     // APK installs over the old one without uninstalling first.
