@@ -77,7 +77,7 @@ object TvHub : TvClient.Callback {
     /** How long a direct volume/channel command may take to be answered before the key press is sent instead. */
     private const val DIRECT_REPLY_MS = 700L
     private const val DEFAULT_OK_HOLD_MS = 400L
-    private const val DEFAULT_OK_HOLD_REPEAT_MS = 100L
+    private const val DEFAULT_OK_HOLD_REPEAT_MS = 60L
     // The button that is down right now and is waiting to turn out to be a tap or a hold.
     private var longId: String? = null
     private var longAct: Act? = null
@@ -106,22 +106,17 @@ object TvHub : TvClient.Callback {
     /** How long OK must be held before it counts as a hold instead of a tap. Lower = more sensitive (triggers sooner). */
     @Volatile var okHoldMs = DEFAULT_OK_HOLD_MS
         private set
-    /**
-     * Off by default: a held OK sends one soft hold and nothing more, same as Back/Exit. Turn on
-     * if your TV's long-press menu (YouTube, the Home screen) wants to feel a button staying down
-     * rather than one press - then OK is resent every [okHoldRepeatMs] for as long as it's held.
-     */
-    @Volatile var okHoldRepeat = false
+    /** What a held OK does: 0 = fast repeated OK (default), 1 = held pointer click, 2 = one single OK. */
+    @Volatile var okHoldMode = 0
         private set
-    /** Only used while [okHoldRepeat] is on: how often OK is resent while held. */
+    val okHoldRepeat: Boolean get() = okHoldMode == 0
+    /** How often OK is resent in the fast-repeat mode, in milliseconds. */
     @Volatile var okHoldRepeatMs = DEFAULT_OK_HOLD_REPEAT_MS
         private set
-    /**
-     * Opt-in: a held OK is sent as a real held Enter key over Bluetooth (the phone acts as a
-     * keyboard paired to the TV, see [BtKeyboard]) instead of Wi-Fi taps. Taps still use Wi-Fi.
-     * Falls back to the Wi-Fi hold whenever the TV isn't connected over Bluetooth.
-     */
-    @Volatile var okHoldBt = false
+    /** Colour theme: dark or light, plus the accent colour name. */
+    @Volatile var themeDark = true
+        private set
+    @Volatile var themeAccent = "blue"
         private set
     @Volatile var onboarded = false
         private set
@@ -181,10 +176,10 @@ object TvHub : TvClient.Callback {
         guardScreen = prefs.getBoolean("guard", true)
         forceKeys = prefs.getBoolean("force_keys", false)
         okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
-        okHoldRepeat = prefs.getBoolean("ok_hold_repeat", false)
-        okHoldRepeatMs = prefs.getLong("ok_hold_repeat_ms", DEFAULT_OK_HOLD_REPEAT_MS)
-        okHoldBt = false // Bluetooth hold removed
-        prefs.edit().putBoolean("ok_hold_bt", false).apply()
+        okHoldMode = prefs.getInt("ok_hold_mode", 0)
+        okHoldRepeatMs = prefs.getLong("ok_hold_pace", DEFAULT_OK_HOLD_REPEAT_MS)
+        themeDark = prefs.getBoolean("theme_dark", true)
+        themeAccent = prefs.getString("theme_accent", "blue") ?: "blue"
         remoteNames.addAll(prefs.getStringSet("remote_names", emptySet()) ?: emptySet())
         onboarded = prefs.getBoolean("onboarded", false) || remoteNames.isNotEmpty()
         loadCustomKeys()
@@ -262,24 +257,21 @@ object TvHub : TvClient.Callback {
         prefs.edit().putLong("ok_hold_ms", ms).apply()
     }
 
-    fun setOkHoldRepeat(on: Boolean) {
-        okHoldRepeat = on
-        prefs.edit().putBoolean("ok_hold_repeat", on).apply()
+    fun setOkHoldMode(mode: Int) {
+        okHoldMode = mode
+        prefs.edit().putInt("ok_hold_mode", mode).apply()
     }
 
-    /** Only matters while [okHoldRepeat] is on: how often OK is resent while held, in milliseconds. */
+    /** How often OK is resent in the fast-repeat mode, in milliseconds. */
     fun setOkHoldRepeatMs(ms: Long) {
         okHoldRepeatMs = ms
-        prefs.edit().putLong("ok_hold_repeat_ms", ms).apply()
+        prefs.edit().putLong("ok_hold_pace", ms).apply()
     }
 
-    /** Turns the real Bluetooth OK hold on or off (see [okHoldBt]). */
-    fun setOkHoldBt(on: Boolean) {
-        okHoldBt = false // Bluetooth hold removed; the switch does nothing
-    }
-
-    /** (Re)starts the Bluetooth keyboard, for example right after the Bluetooth permission was granted. */
-    fun startBt() {
+    fun setTheme(dark: Boolean, accent: String) {
+        themeDark = dark
+        themeAccent = accent
+        prefs.edit().putBoolean("theme_dark", dark).putString("theme_accent", accent).apply()
     }
 
     fun markOnboarded() {
@@ -366,8 +358,17 @@ object TvHub : TvClient.Callback {
     private val pointerSafety = Runnable { pointerUp() }
 
     /** Lets go of a held pointer click. Sent twice so one lost message can't leave it held on the TV. */
+    private val pointerKeep = object : Runnable {
+        override fun run() {
+            if (!ptrDown) return
+            client.pointerHold(true)
+            handler.postDelayed(this, 120L)
+        }
+    }
+
     private fun pointerUp() {
         handler.removeCallbacks(pointerSafety)
+        handler.removeCallbacks(pointerKeep)
         if (!ptrDown) return
         ptrDown = false
         client.pointerHold(false)
@@ -435,34 +436,25 @@ object TvHub : TvClient.Callback {
         return false
     }
 
-    /** True when a held OK would go out as a real Bluetooth key hold right now. */
-    fun btHoldReady(): Boolean = false
-
     /**
-     * A held OK begins. LG's Wi-Fi remote protocol has no "key down / key up", so over Wi-Fi a
-     * hold can only be a soft OK tap (and, with Settings' "Keep sending OK while held", more taps
-     * every [okHoldRepeatMs]) - the TV never sees a true long press that way.
-     *
-     * With Settings' Bluetooth hold on and the phone paired to the TV as a keyboard, this instead
-     * presses Enter and keeps it down until [okHoldEnd], which the TV treats as a real long press
-     * (opens menus, etc). Returns true when that real hold started, false when it fell back to a
-     * Wi-Fi tap; callers only keep resending taps in the false case. Called by [onLongPress] (for
-     * the Bluetooth remote) and [DPadView] (for the on-screen pad).
+     * A held OK begins. Mode 0 (default): the caller keeps resending OK very fast, which many TV
+     * apps read as a held key. Mode 1: press and hold the TV's pointer click until released.
+     * Mode 2: one single OK. Returns true only when a real pointer hold started.
      */
     fun okHoldStart(): Boolean {
-        // Long OK: press and hold the TV's pointer click until the button is let go. With Settings'
-        // "Keep sending OK while held" on, the old repeated soft OK is used instead.
-        if (!okHoldRepeat && client.pointerHold(true)) {
+        if (okHoldMode == 1 && client.pointerHold(true)) {
             ptrDown = true
             handler.removeCallbacks(pointerSafety)
             handler.postDelayed(pointerSafety, 8000L)
+            handler.removeCallbacks(pointerKeep)
+            handler.postDelayed(pointerKeep, 120L)
             return true
         }
         client.button("ENTER")
         return false
     }
 
-    /** The held OK is let go: ends the real Bluetooth hold. Does nothing for a Wi-Fi hold. */
+    /** The held OK is let go. */
     fun okHoldEnd() {
         pointerUp()
     }
@@ -912,7 +904,7 @@ object TvHub : TvClient.Callback {
      *  - Arrows and the other keys keep repeating while held.
      */
     private fun tvKeyAct(name: String): Act = when (name) {
-        "ENTER" -> Act(false, long = { okHoldStart() }, longDelay = okHoldMs, longRepeat = okHoldRepeat && !btHoldReady(), interval = okHoldRepeatMs) {
+        "ENTER" -> Act(false, long = { okHoldStart() }, longDelay = okHoldMs, longRepeat = okHoldRepeat, interval = okHoldRepeatMs) {
             client.button("ENTER")
         }
         "BACK" -> Act(false, long = { client.button("EXIT") }) { client.button("BACK") }

@@ -17,6 +17,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -38,9 +39,13 @@ import java.util.Locale
 
 class MainActivity : Activity(), TvHub.Listener {
 
+    companion object {
+        @Volatile private var reopenSettings = false
+    }
+
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-    private val BT_PERMISSION_REQUEST = 2
+    private var settingsCol: LinearLayout? = null
 
     private lateinit var statusView: TextView
     private lateinit var connectView: View
@@ -58,8 +63,6 @@ class MainActivity : Activity(), TvHub.Listener {
     private lateinit var guardSwitch: Switch
     private lateinit var forceSwitch: Switch
     private lateinit var bannerView: TextView
-    private lateinit var btSwitch: Switch
-    private lateinit var btStatusView: TextView
     private var shownConnected: Boolean? = null
     private var shownApps = ""
     private var statusWanted = ""
@@ -69,8 +72,10 @@ class MainActivity : Activity(), TvHub.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         TvHub.init(this)
+        Pal.apply(TvHub.themeDark, TvHub.themeAccent)
         window.statusBarColor = Pal.bg
         window.navigationBarColor = Pal.bg
+        applyBarIcons()
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         setContentView(buildUi())
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -80,13 +85,42 @@ class MainActivity : Activity(), TvHub.Listener {
         }
         onHubState()
         onHubApps()
+        if (reopenSettings) {
+            reopenSettings = false
+            openSettings(false)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyBarIcons() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (Pal.dark) 0 else mask, mask)
+        } else if (Build.VERSION.SDK_INT >= 23) {
+            var f = window.decorView.systemUiVisibility
+            f = if (Pal.dark) {
+                f and (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv())
+            } else {
+                f or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            }
+            window.decorView.systemUiVisibility = f
+        }
+    }
+
+    /** Saves the theme and rebuilds the screens with a soft cross-fade. */
+    private fun changeTheme(dark: Boolean, accent: String) {
+        if (dark == TvHub.themeDark && accent == TvHub.themeAccent) return
+        TvHub.setTheme(dark, accent)
+        reopenSettings = true
+        recreate()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     override fun onStart() {
         super.onStart()
         TvHub.listener = this
-        BtKeyboard.onChange = { refreshBtStatus() }
-        refreshBtStatus()
         applyKeepOn()
         onHubState()
         onHubApps()
@@ -98,77 +132,8 @@ class MainActivity : Activity(), TvHub.Listener {
 
     override fun onStop() {
         TvHub.listener = null
-        BtKeyboard.onChange = null
         TvHub.cancelCapture()
         super.onStop()
-    }
-
-    // ---- Real OK hold over Bluetooth ----
-    private fun setBtStatus(text: String) {
-        if (::btStatusView.isInitialized) btStatusView.text = text
-    }
-
-    private fun refreshBtStatus() {
-        if (!::btStatusView.isInitialized) return
-        btStatusView.text = "Bluetooth hold: ${BtKeyboard.status()}"
-        btStatusView.setTextColor(if (BtKeyboard.connected) Pal.accent else Pal.muted)
-        if (::btSwitch.isInitialized && btSwitch.isChecked != TvHub.okHoldBt) btSwitch.isChecked = TvHub.okHoldBt
-    }
-
-    /** Asks for the Bluetooth permissions Android 12+ needs. True when they are already granted. */
-    private fun ensureBtPermissions(): Boolean {
-        if (Build.VERSION.SDK_INT < 31) return true
-        val need = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
-            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (need.isEmpty()) return true
-        requestPermissions(need.toTypedArray(), BT_PERMISSION_REQUEST)
-        return false
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == BT_PERMISSION_REQUEST) {
-            TvHub.startBt()
-            refreshBtStatus()
-        }
-    }
-
-    private fun makeBtVisible() {
-        if (!TvHub.okHoldBt) {
-            Toast.makeText(this, "Switch on \"Real hold over Bluetooth\" first.", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (!ensureBtPermissions()) return
-        try {
-            startActivity(
-                Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                    .putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
-            )
-        } catch (e: Exception) {
-            Toast.makeText(this, "Couldn't open the Bluetooth visibility prompt. Open the phone's Bluetooth settings instead.", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun pickBtDevice() {
-        if (!TvHub.okHoldBt) {
-            Toast.makeText(this, "Switch on \"Real hold over Bluetooth\" first.", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (!ensureBtPermissions()) return
-        val devices = BtKeyboard.pairedDevices(this)
-        if (devices.isEmpty()) {
-            Toast.makeText(this, "No paired Bluetooth devices yet. Use \"Make phone visible\" and pair from the TV.", Toast.LENGTH_LONG).show()
-            return
-        }
-        val names = devices.map { BtKeyboard.nameOf(it) }.toTypedArray()
-        dialogBuilder()
-            .setTitle("Connect to which device?")
-            .setItems(names) { _, which ->
-                BtKeyboard.connect(devices[which])
-                Toast.makeText(this, "Connecting to ${names[which]}...", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     // Keys from the learned Bluetooth remote also work while this screen is open.
@@ -237,12 +202,16 @@ class MainActivity : Activity(), TvHub.Listener {
         show.visibility = View.VISIBLE
         if (animate) {
             show.alpha = 0f
-            show.translationY = dp(14).toFloat()
-            show.animate().alpha(1f).translationY(0f).setDuration(260)
-                .setInterpolator(DecelerateInterpolator()).start()
+            show.translationY = dp(18).toFloat()
+            show.scaleX = 0.98f
+            show.scaleY = 0.98f
+            show.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(340)
+                .setInterpolator(DecelerateInterpolator(1.6f)).start()
         } else {
             show.alpha = 1f
             show.translationY = 0f
+            show.scaleX = 1f
+            show.scaleY = 1f
         }
     }
 
@@ -643,6 +612,26 @@ class MainActivity : Activity(), TvHub.Listener {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(0, 0, 0, dp(28))
 
+        // Appearance
+        val themeCard = card()
+        themeCard.addView(label("Appearance", 14f, Pal.text, true))
+        themeCard.addView(
+            segmented(listOf("Dark", "Light"), if (TvHub.themeDark) 0 else 1) { i ->
+                changeTheme(i == 0, TvHub.themeAccent)
+            },
+            lp(MATCH, WRAP, 12, 14)
+        )
+        themeCard.addView(label("Colour", 12f, Pal.muted, true), lp(WRAP, WRAP, 0, 8))
+        val swRow = LinearLayout(this)
+        swRow.orientation = LinearLayout.HORIZONTAL
+        for (n in Pal.accentNames) {
+            val sw = swatch(n, n == TvHub.themeAccent) { changeTheme(TvHub.themeDark, n) }
+            swRow.addView(sw, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }
+        themeCard.addView(swRow)
+        col.addView(themeCard, lp(MATCH, WRAP, 0, 14))
+        settingsCol = col
+
         // Remote
         val remoteCard = card()
         remoteCard.addView(label("Bluetooth remote", 14f, Pal.text, true))
@@ -716,70 +705,44 @@ class MainActivity : Activity(), TvHub.Listener {
         okCard.addView(
             label(
                 "Holding OK on the D-pad or your Bluetooth remote is how you open YouTube's or " +
-                    "the Home screen's long-press menu. Tune it here if it's not triggering, or " +
-                    "triggers by accident.",
+                    "the Home screen's long-press menu. If it doesn't open, try another mode.",
                 12f, Pal.muted
             ),
-            lp(MATCH, WRAP, 6, 14)
+            lp(MATCH, WRAP, 6, 12)
         )
         fun secs(ms: Int) = String.format(Locale.US, "%.2fs", ms / 1000f)
+        val modeInfo = arrayOf(
+            "Sends OK again and again very fast while you hold, like a held key.",
+            "Presses and holds the TV's pointer click. Works when the TV cursor is on the item.",
+            "A hold sends just one OK."
+        )
+        val modeDesc = label(modeInfo[TvHub.okHoldMode.coerceIn(0, 2)], 12f, Pal.muted)
+        val (paceRow, paceBar) = seekRow(
+            "Repeat speed",
+            "How often OK is resent while held. Lower is faster.",
+            min = 30, max = 300, step = 10, initial = TvHub.okHoldRepeatMs.toInt(), valueLabel = ::secs
+        ) { v -> TvHub.setOkHoldRepeatMs(v.toLong()) }
+        fun showPace(on: Boolean) {
+            paceBar.isEnabled = on
+            paceRow.animate().alpha(if (on) 1f else 0.4f).setDuration(200).start()
+        }
+        okCard.addView(
+            segmented(listOf("Fast repeat", "Pointer", "Single"), TvHub.okHoldMode.coerceIn(0, 2)) { i ->
+                TvHub.setOkHoldMode(i)
+                modeDesc.text = modeInfo[i]
+                showPace(i == 0)
+            },
+            lp(MATCH, WRAP, 0, 8)
+        )
+        okCard.addView(modeDesc, lp(MATCH, WRAP, 0, 16))
         val (sensRow, _) = seekRow(
             "Hold sensitivity",
             "How long OK must be held before it counts as a hold rather than a tap. Lower is more sensitive.",
             min = 150, max = 900, step = 50, initial = TvHub.okHoldMs.toInt(), valueLabel = ::secs
         ) { v -> TvHub.setOkHoldMs(v.toLong()) }
         okCard.addView(sensRow, lp(MATCH, WRAP, 0, 16))
-        val (paceRow, paceBar) = seekRow(
-            "Repeat pace",
-            "Only used while \"Keep sending OK while held\" below is on.",
-            min = 60, max = 300, step = 20, initial = TvHub.okHoldRepeatMs.toInt(), valueLabel = ::secs
-        ) { v -> TvHub.setOkHoldRepeatMs(v.toLong()) }
-        paceBar.isEnabled = TvHub.okHoldRepeat
-        paceRow.alpha = if (TvHub.okHoldRepeat) 1f else 0.45f
-        okCard.addView(paceRow, lp(MATCH, WRAP, 0, 16))
-        val (repeatRow, _) = switchRow(
-            "Keep sending OK while held",
-            "Off: a hold sends one soft OK, like Back's hold sends one Exit. On: OK keeps resending at the repeat pace above for as long as it's held.",
-            TvHub.okHoldRepeat
-        ) { on ->
-            TvHub.setOkHoldRepeat(on)
-            paceBar.isEnabled = on
-            paceRow.alpha = if (on) 1f else 0.45f
-        }
-        okCard.addView(repeatRow)
-
-        // Real hold over Bluetooth: the phone pairs with the TV as a keyboard.
-        val (btRow, btSw) = switchRow(
-            "Real hold over Bluetooth",
-            "Wi-Fi can only send OK taps, so the TV never sees a true long press. With this on, a held OK is sent as a real held key over Bluetooth, which opens long-press menus. Taps still use Wi-Fi.",
-            TvHub.okHoldBt
-        ) { on ->
-            TvHub.setOkHoldBt(on)
-            if (on && !ensureBtPermissions()) setBtStatus("Waiting for Bluetooth permission.")
-            refreshBtStatus()
-        }
-        btSwitch = btSw
-        okCard.addView(btRow, lp(MATCH, WRAP, 18))
-        btStatusView = label("", 12f, Pal.accent, true)
-        okCard.addView(btStatusView, lp(MATCH, WRAP, 10))
-        okCard.addView(
-            label(
-                "One-time setup: switch this on, tap \"Make phone visible\", then on the TV open its " +
-                    "Bluetooth settings, search for devices and choose this phone. Accept the pairing " +
-                    "request on both. If the TV is already paired, tap \"Connect a paired TV\" instead.",
-                12f, Pal.muted
-            ),
-            lp(MATCH, WRAP, 6)
-        )
-        val btRowButtons = LinearLayout(this)
-        btRowButtons.orientation = LinearLayout.HORIZONTAL
-        val visibleBtn = pillButton("Make phone visible", Pal.key, Pal.text, 42, 13f) { makeBtVisible() }
-        val connectBtn = pillButton("Connect a paired TV", Pal.key, Pal.text, 42, 13f) { pickBtDevice() }
-        val bp1 = LinearLayout.LayoutParams(0, WRAP, 1f)
-        bp1.rightMargin = dp(6)
-        btRowButtons.addView(visibleBtn, bp1)
-        btRowButtons.addView(connectBtn, LinearLayout.LayoutParams(0, WRAP, 1f))
-        okCard.addView(btRowButtons, lp(MATCH, WRAP, 12))
+        okCard.addView(paceRow)
+        showPace(TvHub.okHoldMode == 0)
         col.addView(okCard, lp(MATCH, WRAP, 0, 14))
 
         // TV
@@ -811,18 +774,34 @@ class MainActivity : Activity(), TvHub.Listener {
         return page
     }
 
-    private fun openSettings() {
+    private fun openSettings(animate: Boolean = true) {
         refreshKeys()
         keepOnSwitch.isChecked = TvHub.keepScreenOn
         guardSwitch.isChecked = TvHub.guardScreen
         forceSwitch.isChecked = TvHub.forceKeys
         onHubState()
         settingsView.animate().cancel()
+        settingsView.visibility = View.VISIBLE
+        val cards = settingsCol
+        if (!animate) {
+            settingsView.alpha = 1f
+            settingsView.translationY = 0f
+            return
+        }
         settingsView.alpha = 0f
         settingsView.translationY = dp(28).toFloat()
-        settingsView.visibility = View.VISIBLE
-        settingsView.animate().alpha(1f).translationY(0f).setDuration(260)
-            .setInterpolator(DecelerateInterpolator()).start()
+        settingsView.animate().alpha(1f).translationY(0f).setDuration(300)
+            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+        if (cards != null) {
+            for (i in 0 until cards.childCount) {
+                val c = cards.getChildAt(i)
+                c.animate().cancel()
+                c.alpha = 0f
+                c.translationY = dp(24).toFloat()
+                c.animate().alpha(1f).translationY(0f).setStartDelay(60L + i * 45L).setDuration(340)
+                    .setInterpolator(DecelerateInterpolator(1.6f)).start()
+            }
+        }
     }
 
     private fun closeSettings() {
@@ -877,7 +856,7 @@ class MainActivity : Activity(), TvHub.Listener {
         sw.isChecked = checked
         val on = intArrayOf(android.R.attr.state_checked)
         sw.thumbTintList = ColorStateList(arrayOf(on, intArrayOf()), intArrayOf(Pal.accent, Pal.muted))
-        sw.trackTintList = ColorStateList(arrayOf(on, intArrayOf()), intArrayOf(0x554FD1C5, Pal.line))
+        sw.trackTintList = ColorStateList(arrayOf(on, intArrayOf()), intArrayOf(Pal.withAlpha(Pal.accent, 0x66), Pal.line))
         sw.setOnCheckedChangeListener { _, isOn -> onChange(isOn) }
         row.addView(sw)
         return Pair(row, sw)
@@ -925,6 +904,55 @@ class MainActivity : Activity(), TvHub.Listener {
         })
         row.addView(bar, lp(MATCH, WRAP, 2))
         return Pair(row, bar)
+    }
+
+    /** A row of pill choices; the selected one is filled with the accent colour. */
+    private fun segmented(options: List<String>, selected: Int, onPick: (Int) -> Unit): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        val views = ArrayList<TextView>()
+        fun paint(sel: Int) {
+            views.forEachIndexed { i, v ->
+                val on = i == sel
+                v.background = android.graphics.drawable.RippleDrawable(
+                    rippleColor(), btnShape(if (on) Pal.accent else Pal.key, dpf(40)), null
+                )
+                v.setTextColor(if (on) Pal.onAccent else Pal.text)
+            }
+        }
+        options.forEachIndexed { i, name ->
+            val b = pillButton(name, Pal.key, Pal.text, 42, 13f) {
+                paint(i)
+                onPick(i)
+            }
+            views.add(b)
+            val p = LinearLayout.LayoutParams(0, WRAP, 1f)
+            if (i > 0) p.leftMargin = dp(6)
+            row.addView(b, p)
+        }
+        paint(selected)
+        return row
+    }
+
+    /** A round colour choice for the theme; the chosen one gets a ring and grows a little. */
+    private fun swatch(name: String, chosen: Boolean, onPick: () -> Unit): FrameLayout {
+        val cell = FrameLayout(this)
+        val dot = View(this)
+        val g = circle(Pal.swatch(name, Pal.dark))
+        if (chosen) g.setStroke(dp(3), Pal.text)
+        dot.background = g
+        dot.scaleX = if (chosen) 1f else 0.82f
+        dot.scaleY = dot.scaleX
+        cell.addView(dot, FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER))
+        cell.contentDescription = name
+        cell.isClickable = true
+        cell.setOnClickListener {
+            it.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+            dot.animate().scaleX(1.12f).scaleY(1.12f).setDuration(120)
+                .setInterpolator(OvershootInterpolator(2f)).start()
+            onPick()
+        }
+        return cell
     }
 
     // ---- Choosing and learning the remote ----
@@ -1089,7 +1117,11 @@ class MainActivity : Activity(), TvHub.Listener {
 
     // ---- Programming a remote button ----
     private fun dialogBuilder(): AlertDialog.Builder =
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        AlertDialog.Builder(
+            this,
+            if (Pal.dark) android.R.style.Theme_DeviceDefault_Dialog_Alert
+            else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+        )
 
     private fun programNewKey() {
         val dlg = dialogBuilder()

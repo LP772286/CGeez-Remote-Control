@@ -11,6 +11,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.animation.ValueAnimator
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -19,6 +20,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -27,17 +31,80 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
 
-/** Colours used across the app. */
+/** Colours used across the app. Call [apply] before building any screen. */
 object Pal {
-    val bg = Color.parseColor("#0D0F12")
-    val surface = Color.parseColor("#16191E")
-    val key = Color.parseColor("#1E2228")
-    val line = Color.parseColor("#262B32")
-    val text = Color.parseColor("#E8EBEF")
-    val muted = Color.parseColor("#7D8793")
-    val accent = Color.parseColor("#4FD1C5")
-    val onAccent = Color.parseColor("#06201D")
-    val danger = Color.parseColor("#F0605D")
+    var dark = true
+    var bg = 0
+    var surface = 0
+    var key = 0
+    var line = 0
+    var text = 0
+    var muted = 0
+    var accent = 0
+    var onAccent = 0
+    var danger = 0
+
+    val accentNames = listOf("blue", "green", "orange", "purple", "grey")
+    private val darkAccent = mapOf(
+        "blue" to "#5B9DFF", "green" to "#4CD08A", "orange" to "#FF9F4A",
+        "purple" to "#A98BFF", "grey" to "#B4BCC7"
+    )
+    private val lightAccent = mapOf(
+        "blue" to "#2F6FE4", "green" to "#1FA463", "orange" to "#E8750F",
+        "purple" to "#7C4DDB", "grey" to "#5F6873"
+    )
+
+    fun swatch(name: String, dark: Boolean): Int =
+        Color.parseColor((if (dark) darkAccent else lightAccent)[name] ?: "#5B9DFF")
+
+    fun apply(isDark: Boolean, accentName: String) {
+        dark = isDark
+        if (isDark) {
+            bg = Color.parseColor("#0F1115")
+            surface = Color.parseColor("#1A1D23")
+            key = Color.parseColor("#252A32")
+            line = Color.parseColor("#2E343D")
+            text = Color.parseColor("#EDEFF3")
+            muted = Color.parseColor("#8A93A0")
+            onAccent = Color.parseColor("#0B1220")
+            danger = Color.parseColor("#FF6B68")
+        } else {
+            bg = Color.parseColor("#F2F4F8")
+            surface = Color.parseColor("#FFFFFF")
+            key = Color.parseColor("#E8ECF2")
+            line = Color.parseColor("#D8DDE5")
+            text = Color.parseColor("#14181F")
+            muted = Color.parseColor("#66707D")
+            onAccent = Color.parseColor("#FFFFFF")
+            danger = Color.parseColor("#D9403D")
+        }
+        accent = swatch(accentName, isDark)
+    }
+
+    init { apply(true, "blue") }
+
+    fun withAlpha(color: Int, a: Int): Int = (color and 0x00FFFFFF) or (a shl 24)
+}
+
+/** Blends a colour toward white (f > 0) or black (f < 0). */
+fun shade(color: Int, f: Float): Int {
+    val t = if (f >= 0) 255 else 0
+    val k = kotlin.math.abs(f)
+    val r = (Color.red(color) + (t - Color.red(color)) * k).toInt()
+    val g = (Color.green(color) + (t - Color.green(color)) * k).toInt()
+    val b = (Color.blue(color) + (t - Color.blue(color)) * k).toInt()
+    return Color.argb(Color.alpha(color), r, g, b)
+}
+
+/** Button background: soft top-to-bottom gradient with a thin edge. Accent fills get a glow-like lift instead of an edge. */
+fun Context.btnShape(fill: Int, radiusPx: Float, oval: Boolean = false): GradientDrawable {
+    if (fill == Color.TRANSPARENT) return if (oval) circle(fill) else roundRect(fill, radiusPx)
+    val isAccent = fill == Pal.accent
+    val top = if (isAccent) shade(fill, 0.18f) else shade(fill, if (Pal.dark) 0.06f else -0.03f)
+    val g = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(top, fill))
+    if (oval) g.shape = GradientDrawable.OVAL else g.cornerRadius = radiusPx
+    if (!isAccent) g.setStroke(dp(1), Pal.line)
+    return g
 }
 
 fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -57,14 +124,25 @@ fun circle(color: Int): GradientDrawable {
     return g
 }
 
-/** Gentle press animation for ordinary buttons. Does not consume the touch, so clicks still work. */
+private fun pressDown(v: View, scale: Float) {
+    v.animate().cancel()
+    v.animate().scaleX(scale).scaleY(scale).setDuration(90)
+        .setInterpolator(DecelerateInterpolator()).start()
+}
+
+private fun pressUp(v: View) {
+    v.animate().cancel()
+    v.animate().scaleX(1f).scaleY(1f).setDuration(280)
+        .setInterpolator(OvershootInterpolator(2.4f)).start()
+}
+
+/** Gentle springy press animation for ordinary buttons. Does not consume the touch, so clicks still work. */
 @SuppressLint("ClickableViewAccessibility")
 fun pressFx(v: View) {
     v.setOnTouchListener { view, ev ->
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> view.animate().scaleX(0.95f).scaleY(0.95f).setDuration(70).start()
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                view.animate().scaleX(1f).scaleY(1f).setDuration(140).start()
+            MotionEvent.ACTION_DOWN -> pressDown(view, 0.95f)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> pressUp(view)
         }
         false
     }
@@ -79,15 +157,15 @@ fun attachPress(v: View, repeat: Boolean, interval: Long, onPress: () -> Unit) {
     val rep = HoldRepeater(Handler(Looper.getMainLooper()))
     fun release() {
         rep.stop()
-        v.alpha = 1f
-        v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+        v.animate().alpha(1f).setDuration(220).start()
+        pressUp(v)
     }
     v.setOnTouchListener { _, ev ->
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 v.parent?.requestDisallowInterceptTouchEvent(true)
-                v.alpha = 0.7f
-                v.animate().scaleX(0.94f).scaleY(0.94f).setDuration(60).start()
+                v.animate().alpha(0.75f).setDuration(90).start()
+                pressDown(v, 0.93f)
                 v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 onPress()
                 if (repeat) rep.start(interval = interval, action = onPress)
@@ -97,6 +175,8 @@ fun attachPress(v: View, repeat: Boolean, interval: Long, onPress: () -> Unit) {
         true
     }
 }
+
+fun rippleColor(): ColorStateList = ColorStateList.valueOf(Pal.withAlpha(Pal.accent, 0x40))
 
 /**
  * A round or rounded-rectangle icon button. With [hold] it behaves like a remote key (fires on
@@ -117,7 +197,7 @@ fun Context.iconButton(
     onPress: () -> Unit
 ): FrameLayout {
     val f = FrameLayout(this)
-    val shape: GradientDrawable = if (cornerDp < 0) circle(fill) else roundRect(fill, dpf(cornerDp))
+    val shape: GradientDrawable = btnShape(fill, if (cornerDp < 0) 0f else dpf(cornerDp), cornerDp < 0)
     f.contentDescription = desc
     val iv = ImageView(this)
     iv.setImageResource(icon)
@@ -128,7 +208,7 @@ fun Context.iconButton(
         f.background = shape
         attachPress(f, repeat, interval, onPress)
     } else {
-        f.background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), shape, null)
+        f.background = RippleDrawable(rippleColor(), shape, null)
         f.isClickable = true
         f.setOnClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -161,7 +241,7 @@ fun Context.pillButton(
     b.setSingleLine(true)
     b.ellipsize = android.text.TextUtils.TruncateAt.END
     b.setPadding(dp(10), 0, dp(10), 0)
-    b.background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), roundRect(fill, dpf(heightDp)), null)
+    b.background = RippleDrawable(rippleColor(), btnShape(fill, dpf(heightDp)), null)
     b.isClickable = true
     b.setOnClickListener {
         it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -235,12 +315,8 @@ fun Context.appTile(app: TvApp, sizeDp: Int, widthDp: Int, onClick: () -> Unit):
 
 /**
  * Round directional pad with OK in the middle. The arrow zones fire on touch and repeat while
- * held. OK is different: a quick tap sends one OK (on release), while holding past
- * [TvHub.okHoldMs] - Settings' "Hold sensitivity" - starts a hold: a real held Enter key over
- * Bluetooth when Settings' Bluetooth hold is on and connected ([TvHub.okHoldBt]), otherwise one
- * soft OK, the same as Back's hold sends one Exit, or, with Settings' "Keep sending OK while
- * held" turned on ([TvHub.okHoldRepeat]), OK resent every [TvHub.okHoldRepeatMs] for as long as
- * the finger stays down.
+ * held. OK: a quick tap sends one OK (on release); holding past [TvHub.okHoldMs] starts a hold,
+ * shown by a ring filling around OK, and works as chosen in Settings' "OK hold" mode.
  */
 class DPadView(
     context: Context,
@@ -255,6 +331,11 @@ class DPadView(
     private val zOk = 5
 
     private var zone = zNone
+    private var hiZone = zNone
+    private var hi = 0f
+    private var ring = 0f
+    private var hiAnim: ValueAnimator? = null
+    private var ringAnim: ValueAnimator? = null
     private val rep = HoldRepeater(Handler(Looper.getMainLooper()))
 
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Pal.surface }
@@ -263,8 +344,17 @@ class DPadView(
         style = Paint.Style.STROKE
         strokeWidth = context.dpf(1)
     }
-    private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x2EFFFFFF }
-    private val okPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Pal.accent }
+    private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Pal.accent }
+    private val okPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Pal.accent
+        setShadowLayer(context.dpf(10), 0f, context.dpf(3), Pal.withAlpha(Pal.accent, 110))
+    }
+    private val holdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Pal.accent
+        style = Paint.Style.STROKE
+        strokeWidth = context.dpf(3)
+        strokeCap = Paint.Cap.ROUND
+    }
     private val okTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Pal.onAccent
         textAlign = Paint.Align.CENTER
@@ -282,19 +372,22 @@ class DPadView(
 
     init {
         for (c in chevrons) c.setTint(Pal.text)
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
         contentDescription = "Directional pad"
     }
 
     override fun onDetachedFromWindow() {
         rep.stop()
+        hiAnim?.cancel()
+        ringAnim?.cancel()
         uiHandler.removeCallbacks(okHoldTask)
-        TvHub.okHoldEnd() // never leave a Bluetooth OK held down
+        TvHub.okHoldEnd()
         super.onDetachedFromWindow()
     }
 
     private fun cx() = width / 2f
     private fun cy() = height / 2f
-    private fun outerR() = min(width, height) / 2f - context.dpf(2)
+    private fun outerR() = min(width, height) / 2f - context.dpf(6)
     private fun okR() = outerR() * 0.37f
 
     override fun onDraw(canvas: Canvas) {
@@ -305,19 +398,29 @@ class DPadView(
         canvas.drawCircle(cx, cy, r, edgePaint)
 
         oval.set(cx - r, cy - r, cx + r, cy + r)
-        when (zone) {
-            zUp -> canvas.drawArc(oval, 225f, 90f, true, hiPaint)
-            zDown -> canvas.drawArc(oval, 45f, 90f, true, hiPaint)
-            zLeft -> canvas.drawArc(oval, 135f, 90f, true, hiPaint)
-            zRight -> canvas.drawArc(oval, -45f, 90f, true, hiPaint)
+        if (hi > 0f && hiZone != zOk && hiZone != zNone) {
+            hiPaint.alpha = (hi * 70).toInt()
+            when (hiZone) {
+                zUp -> canvas.drawArc(oval, 225f, 90f, true, hiPaint)
+                zDown -> canvas.drawArc(oval, 45f, 90f, true, hiPaint)
+                zLeft -> canvas.drawArc(oval, 135f, 90f, true, hiPaint)
+                zRight -> canvas.drawArc(oval, -45f, 90f, true, hiPaint)
+            }
         }
 
-        val okR = okR()
-        okPaint.alpha = if (zone == zOk) 170 else 255
+        val okScale = if (hiZone == zOk) 1f - 0.07f * hi else 1f
+        val okR = okR() * okScale
         canvas.drawCircle(cx, cy, okR, okPaint)
         canvas.drawText("OK", cx, cy + okTextPaint.textSize * 0.35f, okTextPaint)
 
-        val d = (r + okR) / 2f
+        if (ring > 0f) {
+            val rr = okR() + context.dpf(8)
+            oval.set(cx - rr, cy - rr, cx + rr, cy + rr)
+            holdPaint.alpha = 220
+            canvas.drawArc(oval, -90f, 360f * ring, false, holdPaint)
+        }
+
+        val d = (r + okR()) / 2f + context.dpf(3)
         val half = context.dp(15)
         place(canvas, chevrons[0], cx, cy - d, half)
         place(canvas, chevrons[1], cx, cy + d, half)
@@ -351,19 +454,50 @@ class DPadView(
         else -> "ENTER"
     }
 
+    private fun animHi(to: Float) {
+        hiAnim?.cancel()
+        val a = ValueAnimator.ofFloat(hi, to)
+        a.duration = if (to > hi) 90L else 260L
+        a.interpolator = DecelerateInterpolator()
+        a.addUpdateListener {
+            hi = it.animatedValue as Float
+            invalidate()
+        }
+        hiAnim = a
+        a.start()
+    }
+
+    private fun animRing(start: Boolean) {
+        ringAnim?.cancel()
+        if (start) {
+            val a = ValueAnimator.ofFloat(0f, 1f)
+            a.duration = TvHub.okHoldMs
+            a.interpolator = LinearInterpolator()
+            a.addUpdateListener {
+                ring = it.animatedValue as Float
+                invalidate()
+            }
+            ringAnim = a
+            a.start()
+        } else if (ring > 0f) {
+            val a = ValueAnimator.ofFloat(ring, 0f)
+            a.duration = 200L
+            a.addUpdateListener {
+                ring = it.animatedValue as Float
+                invalidate()
+            }
+            ringAnim = a
+            a.start()
+        }
+    }
+
     private val uiHandler = Handler(Looper.getMainLooper())
     private var okFired = false
     private val okHoldTask = Runnable {
         okFired = true
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        // With Settings' Bluetooth hold on and the TV connected, this presses a real Enter key and
-        // keeps it down until the finger lifts (setZone calls TvHub.okHoldEnd), so the TV sees a
-        // true long press. Otherwise it's one soft Wi-Fi OK, same as Back's hold sends one Exit.
-        val realHold = TvHub.okHoldStart()
-        // Only for the Wi-Fi hold, and only if "Keep sending OK while held" is on in Settings: keep
-        // resending OK at the chosen pace until the finger lifts or slides off OK, at which
-        // point setZone's rep.stop() below ends it - exactly how an arrow key's repeat is stopped.
-        if (!realHold && TvHub.okHoldRepeat) {
+        val real = TvHub.okHoldStart()
+        if (!real && TvHub.okHoldRepeat) {
             rep.start(initialDelay = TvHub.okHoldRepeatMs, interval = TvHub.okHoldRepeatMs) { TvHub.okHoldStart() }
         }
     }
@@ -374,15 +508,20 @@ class DPadView(
         zone = z
         rep.stop()
         uiHandler.removeCallbacks(okHoldTask)
-        // OK works like Back: letting go quickly is a tap (OK, sent on release); holding it
-        // starts a hold, which keeps resending OK (above) until the finger lets go.
         if (was == zOk) {
             if (!okFired) onKey("ENTER") else TvHub.okHoldEnd()
+            animRing(false)
         }
         okFired = false
-        invalidate()
+        if (z == zNone) {
+            animHi(0f)
+        } else {
+            hiZone = z
+            animHi(1f)
+        }
         if (z == zOk) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            animRing(true)
             uiHandler.postDelayed(okHoldTask, TvHub.okHoldMs)
         } else if (z != zNone) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
