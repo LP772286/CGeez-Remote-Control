@@ -183,7 +183,7 @@ class MainActivity : Activity(), TvHub.Listener {
         }
         if (c) setStatus("Connected  ·  ${TvHub.ip}", Pal.accent)
         muteIcon.setImageResource(if (TvHub.muted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
-        muteIcon.setColorFilter(if (TvHub.muted) Pal.danger else Pal.text)
+        muteIcon.setColorFilter(if (TvHub.muted) Pal.danger else Pal.accent)
         updateBanner()
 
         val remote = if (TvHub.remoteNames.isEmpty()) "not chosen yet" else TvHub.remoteNames.joinToString()
@@ -353,7 +353,7 @@ class MainActivity : Activity(), TvHub.Listener {
         statusView.maxLines = 2
         titleCol.addView(statusView, lp(WRAP, WRAP, 2))
         bar.addView(titleCol, LinearLayout.LayoutParams(0, WRAP, 1f))
-        bar.addView(iconButton(R.drawable.ic_tune, 44, 22, Pal.surface, Pal.text, "Settings") { openSettings() })
+        bar.addView(iconButton(R.drawable.ic_tune, 44, 22, Pal.surface, Pal.accent, "Settings") { openSettings() })
         main.addView(bar, lp(MATCH, WRAP, 0, 10))
 
         bannerView = TextView(this)
@@ -428,7 +428,7 @@ class MainActivity : Activity(), TvHub.Listener {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(0, dp(6), 0, dp(24))
 
-        val icon = Pal.text
+        val icon = Pal.accent
 
         // Power and mute
         val power = iconButton(R.drawable.ic_power, 54, 26, Pal.surface, Pal.danger, "Power") {
@@ -548,7 +548,7 @@ class MainActivity : Activity(), TvHub.Listener {
         pill.gravity = Gravity.CENTER_HORIZONTAL
         pill.background = roundRect(Pal.surface, dpf(36))
         fun half(res: Int, desc: String, act: () -> Unit): FrameLayout {
-            val b = iconButton(res, 54, 24, Color.TRANSPARENT, Pal.text, desc, hold = true, repeat = true, onPress = act)
+            val b = iconButton(res, 54, 24, Color.TRANSPARENT, Pal.accent, desc, hold = true, repeat = true, onPress = act)
             b.layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
             return b
         }
@@ -601,7 +601,7 @@ class MainActivity : Activity(), TvHub.Listener {
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER_VERTICAL
-        bar.addView(iconButton(R.drawable.ic_back, 44, 22, Pal.surface, Pal.text, "Close settings") { closeSettings() })
+        bar.addView(iconButton(R.drawable.ic_back, 44, 22, Pal.surface, Pal.accent, "Close settings") { closeSettings() })
         val t = label("Settings", 20f, Pal.text, true)
         val tp = LinearLayout.LayoutParams(WRAP, WRAP)
         tp.leftMargin = dp(14)
@@ -712,8 +712,8 @@ class MainActivity : Activity(), TvHub.Listener {
         )
         fun secs(ms: Int) = String.format(Locale.US, "%.2fs", ms / 1000f)
         val modeInfo = arrayOf(
-            "Sends OK again and again very fast while you hold, like a held key.",
-            "Presses and holds the TV's pointer click. Works when the TV cursor is on the item.",
+            "Sends OK again and again very fast while you hold. Can select things repeatedly.",
+            "Wakes the TV cursor and holds a pointer click. Best for opening long-press menus.",
             "A hold sends just one OK."
         )
         val modeDesc = label(modeInfo[TvHub.okHoldMode.coerceIn(0, 2)], 12f, Pal.muted)

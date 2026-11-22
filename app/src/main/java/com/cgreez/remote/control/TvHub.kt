@@ -176,7 +176,7 @@ object TvHub : TvClient.Callback {
         guardScreen = prefs.getBoolean("guard", true)
         forceKeys = prefs.getBoolean("force_keys", false)
         okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
-        okHoldMode = prefs.getInt("ok_hold_mode", 0)
+        okHoldMode = prefs.getInt("ok_hold_mode2", 1)
         okHoldRepeatMs = prefs.getLong("ok_hold_pace", DEFAULT_OK_HOLD_REPEAT_MS)
         themeDark = prefs.getBoolean("theme_dark", true)
         themeAccent = prefs.getString("theme_accent", "blue") ?: "blue"
@@ -259,7 +259,7 @@ object TvHub : TvClient.Callback {
 
     fun setOkHoldMode(mode: Int) {
         okHoldMode = mode
-        prefs.edit().putInt("ok_hold_mode", mode).apply()
+        prefs.edit().putInt("ok_hold_mode2", mode).apply()
     }
 
     /** How often OK is resent in the fast-repeat mode, in milliseconds. */
@@ -358,11 +358,13 @@ object TvHub : TvClient.Callback {
     private val pointerSafety = Runnable { pointerUp() }
 
     /** Lets go of a held pointer click. Sent twice so one lost message can't leave it held on the TV. */
+    private var jitter = 1
     private val pointerKeep = object : Runnable {
         override fun run() {
             if (!ptrDown) return
-            client.pointerHold(true)
-            handler.postDelayed(this, 120L)
+            jitter = -jitter
+            client.pointerMove(jitter, 0, true)
+            handler.postDelayed(this, 100L)
         }
     }
 
@@ -442,12 +444,19 @@ object TvHub : TvClient.Callback {
      * Mode 2: one single OK. Returns true only when a real pointer hold started.
      */
     fun okHoldStart(): Boolean {
-        if (okHoldMode == 1 && client.pointerHold(true)) {
+        if (okHoldMode == 1 && client.pointerMove(1, 0, false)) {
+            // Wake the TV cursor first, then press and hold the pointer button on it.
+            client.pointerMove(-1, 0, false)
             ptrDown = true
             handler.removeCallbacks(pointerSafety)
             handler.postDelayed(pointerSafety, 8000L)
             handler.removeCallbacks(pointerKeep)
-            handler.postDelayed(pointerKeep, 120L)
+            handler.postDelayed({
+                if (ptrDown) {
+                    client.pointerHold(true)
+                    handler.postDelayed(pointerKeep, 100L)
+                }
+            }, 80L)
             return true
         }
         client.button("ENTER")
@@ -828,6 +837,16 @@ object TvHub : TvClient.Callback {
             // Taken only when it was the remote's button (or the remote changed its name on reconnect).
             if (mine && (remote || dev == null || likelyExternal(dev))) return true
             if (remote || dev == null) return true
+        }
+        val capNow = capture
+        if (capNow != null && !learning && (remote || likelyExternal(dev))) {
+            if (isDown && event.repeatCount == 0) {
+                capture = null
+                val cid = keyId(event)
+                val cname = keyName(event)
+                handler.post { capNow(cid, cname) }
+            }
+            return true
         }
         if (learning || !remote) return false
         if (isDown && code == KeyEvent.KEYCODE_VOLUME_DOWN) lastRemoteVolDownAt = SystemClock.uptimeMillis()

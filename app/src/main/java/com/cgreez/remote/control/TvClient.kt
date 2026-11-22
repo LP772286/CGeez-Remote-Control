@@ -245,6 +245,12 @@ class TvClient(private val cb: Callback) {
         return p.send("type:move\ndx:0\ndy:0\ndown:${if (down) 1 else 0}\n\n")
     }
 
+    /** Moves the TV's pointer by (dx, dy); with [down] the pointer button is held while moving. */
+    fun pointerMove(dx: Int, dy: Int, down: Boolean): Boolean {
+        val p = ptr ?: return false
+        return p.send("type:move\ndx:$dx\ndy:$dy\ndown:${if (down) 1 else 0}\n\n")
+    }
+
     /** Shows a pop-up message on the TV screen. */
     fun toast(message: String, onResult: (Boolean, String) -> Unit) {
         request("system.notifications/createToast", JSONObject().put("message", message)) { p ->
