@@ -235,8 +235,11 @@ fun Context.appTile(app: TvApp, sizeDp: Int, widthDp: Int, onClick: () -> Unit):
 
 /**
  * Round directional pad with OK in the middle. The arrow zones fire on touch and repeat while
- * held. OK fires once on touch and never repeats, however long it's held - holding it registers
- * as one OK press (a hold), not a burst of OK, OK, OK.
+ * held. OK is different: a quick tap sends one OK (on release), while holding past
+ * [TvHub.okHoldMs] - Settings' "Hold sensitivity" - starts a hold: one soft OK by default, the
+ * same as Back's hold sends one Exit, or, with Settings' "Keep sending OK while held" turned on
+ * ([TvHub.okHoldRepeat]), OK resent every [TvHub.okHoldRepeatMs] for as long as the finger
+ * stays down.
  */
 class DPadView(
     context: Context,
@@ -351,6 +354,13 @@ class DPadView(
         okFired = true
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         TvHub.okHold()
+        // Off by default: a held OK is one soft press and nothing more, same as Back's hold
+        // sends one Exit. Only if "Keep sending OK while held" is on in Settings do we keep
+        // resending OK at the chosen pace, until the finger lifts or slides off OK, at which
+        // point setZone's rep.stop() below ends it - exactly how an arrow key's repeat is stopped.
+        if (TvHub.okHoldRepeat) {
+            rep.start(initialDelay = TvHub.okHoldRepeatMs, interval = TvHub.okHoldRepeatMs) { TvHub.okHold() }
+        }
     }
 
     private fun setZone(z: Int) {
@@ -359,14 +369,14 @@ class DPadView(
         zone = z
         rep.stop()
         uiHandler.removeCallbacks(okHoldTask)
-        // OK works like Back: letting go quickly is a tap (OK, sent on release); holding it sends
-        // one hold and nothing more, however long the finger stays down.
+        // OK works like Back: letting go quickly is a tap (OK, sent on release); holding it
+        // starts a hold, which keeps resending OK (above) until the finger lets go.
         if (was == zOk && !okFired) onKey("ENTER")
         okFired = false
         invalidate()
         if (z == zOk) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            uiHandler.postDelayed(okHoldTask, TvHub.OK_HOLD_MS)
+            uiHandler.postDelayed(okHoldTask, TvHub.okHoldMs)
         } else if (z != zNone) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             val name = nameOf(z)

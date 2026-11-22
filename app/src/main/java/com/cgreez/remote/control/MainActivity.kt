@@ -28,11 +28,13 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.Toast
+import java.util.Locale
 
 class MainActivity : Activity(), TvHub.Listener {
 
@@ -634,6 +636,45 @@ class MainActivity : Activity(), TvHub.Listener {
         optCard.addView(keepRow, lp(MATCH, WRAP, 16))
         col.addView(optCard, lp(MATCH, WRAP, 0, 14))
 
+        // OK hold
+        val okCard = card()
+        okCard.addView(label("OK hold", 14f, Pal.text, true))
+        okCard.addView(
+            label(
+                "Holding OK on the D-pad or your Bluetooth remote is how you open YouTube's or " +
+                    "the Home screen's long-press menu. Tune it here if it's not triggering, or " +
+                    "triggers by accident.",
+                12f, Pal.muted
+            ),
+            lp(MATCH, WRAP, 6, 14)
+        )
+        fun secs(ms: Int) = String.format(Locale.US, "%.2fs", ms / 1000f)
+        val (sensRow, _) = seekRow(
+            "Hold sensitivity",
+            "How long OK must be held before it counts as a hold rather than a tap. Lower is more sensitive.",
+            min = 150, max = 900, step = 50, initial = TvHub.okHoldMs.toInt(), valueLabel = ::secs
+        ) { v -> TvHub.setOkHoldMs(v.toLong()) }
+        okCard.addView(sensRow, lp(MATCH, WRAP, 0, 16))
+        val (paceRow, paceBar) = seekRow(
+            "Repeat pace",
+            "Only used while \"Keep sending OK while held\" below is on.",
+            min = 60, max = 300, step = 20, initial = TvHub.okHoldRepeatMs.toInt(), valueLabel = ::secs
+        ) { v -> TvHub.setOkHoldRepeatMs(v.toLong()) }
+        paceBar.isEnabled = TvHub.okHoldRepeat
+        paceRow.alpha = if (TvHub.okHoldRepeat) 1f else 0.45f
+        okCard.addView(paceRow, lp(MATCH, WRAP, 0, 16))
+        val (repeatRow, _) = switchRow(
+            "Keep sending OK while held",
+            "Off: a hold sends one soft OK, like Back's hold sends one Exit. On: OK keeps resending at the repeat pace above for as long as it's held.",
+            TvHub.okHoldRepeat
+        ) { on ->
+            TvHub.setOkHoldRepeat(on)
+            paceBar.isEnabled = on
+            paceRow.alpha = if (on) 1f else 0.45f
+        }
+        okCard.addView(repeatRow)
+        col.addView(okCard, lp(MATCH, WRAP, 0, 14))
+
         // TV
         val tvCard = card()
         tvCard.addView(label("TV", 14f, Pal.text, true))
@@ -733,6 +774,50 @@ class MainActivity : Activity(), TvHub.Listener {
         sw.setOnCheckedChangeListener { _, isOn -> onChange(isOn) }
         row.addView(sw)
         return Pair(row, sw)
+    }
+
+    /**
+     * A labelled slider for a millisecond value, snapped to [step]. [valueLabel] formats the
+     * current value for display (e.g. "0.40s"); [onChange] is called as the user drags.
+     */
+    private fun seekRow(
+        title: String,
+        subtitle: String,
+        min: Int,
+        max: Int,
+        step: Int,
+        initial: Int,
+        valueLabel: (Int) -> String,
+        onChange: (Int) -> Unit
+    ): Pair<LinearLayout, SeekBar> {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.VERTICAL
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.addView(label(title, 14f, Pal.text, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        val valueView = label(valueLabel(initial), 13f, Pal.accent, true)
+        head.addView(valueView)
+        row.addView(head)
+        row.addView(label(subtitle, 12f, Pal.muted), lp(WRAP, WRAP, 2))
+        val bar = SeekBar(this)
+        val steps = (max - min) / step
+        bar.max = steps
+        bar.progress = ((initial - min).toFloat() / step).toInt().coerceIn(0, steps)
+        bar.progressTintList = ColorStateList.valueOf(Pal.accent)
+        bar.progressBackgroundTintList = ColorStateList.valueOf(Pal.line)
+        bar.thumbTintList = ColorStateList.valueOf(Pal.accent)
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                val v = min + p * step
+                valueView.text = valueLabel(v)
+                if (fromUser) onChange(v)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) {}
+            override fun onStopTrackingTouch(sb: SeekBar) {}
+        })
+        row.addView(bar, lp(MATCH, WRAP, 2))
+        return Pair(row, bar)
     }
 
     // ---- Choosing and learning the remote ----

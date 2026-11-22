@@ -38,13 +38,17 @@ object TvHub : TvClient.Callback {
 
     /**
      * What a remote button does. [go] runs when the button is pressed, and with [repeat] it keeps
-     * running while the button is held. A button with a [long] action is different: holding it never
-     * repeats. A quick tap runs [go] when the button is released, and holding it for
-     * [LONG_PRESS_MS] runs [long] once instead (and [go] is skipped).
+     * running while the button is held. A button with a [long] action is different: a quick tap
+     * runs [go] when the button is released, and holding it for [longDelay] runs [long] once
+     * instead (and [go] is skipped). With [longRepeat] set, [long] isn't a one-off: once it has
+     * fired, it keeps firing again every [interval] for as long as the button stays down - used
+     * for OK, which has no TV button code of its own to send once and be done with.
      */
     private class Act(
         val repeat: Boolean,
         val long: (() -> Unit)? = null,
+        val longDelay: Long = LONG_PRESS_MS,
+        val longRepeat: Boolean = false,
         val delay: Long = 380L,
         val interval: Long = 110L,
         val go: () -> Unit
@@ -63,8 +67,8 @@ object TvHub : TvClient.Callback {
     private const val LONG_PRESS_MS = 600L
     /** How long a direct volume/channel command may take to be answered before the key press is sent instead. */
     private const val DIRECT_REPLY_MS = 700L
-    /** OK: a tap sends OK when released; held this long it sends one hold instead (see [okHold]). */
-    const val OK_HOLD_MS = 600L
+    private const val DEFAULT_OK_HOLD_MS = 400L
+    private const val DEFAULT_OK_HOLD_REPEAT_MS = 100L
     // The button that is down right now and is waiting to turn out to be a tap or a hold.
     private var longId: String? = null
     private var longAct: Act? = null
@@ -89,6 +93,19 @@ object TvHub : TvClient.Callback {
         private set
     /** When true, volume / channel / mute are sent as TV remote key presses instead of direct commands. */
     @Volatile var forceKeys = false
+        private set
+    /** How long OK must be held before it counts as a hold instead of a tap. Lower = more sensitive (triggers sooner). */
+    @Volatile var okHoldMs = DEFAULT_OK_HOLD_MS
+        private set
+    /**
+     * Off by default: a held OK sends one soft hold and nothing more, same as Back/Exit. Turn on
+     * if your TV's long-press menu (YouTube, the Home screen) wants to feel a button staying down
+     * rather than one press - then OK is resent every [okHoldRepeatMs] for as long as it's held.
+     */
+    @Volatile var okHoldRepeat = false
+        private set
+    /** Only used while [okHoldRepeat] is on: how often OK is resent while held. */
+    @Volatile var okHoldRepeatMs = DEFAULT_OK_HOLD_REPEAT_MS
         private set
     @Volatile var onboarded = false
         private set
@@ -146,6 +163,9 @@ object TvHub : TvClient.Callback {
         keepScreenOn = prefs.getBoolean("keep_on", false)
         guardScreen = prefs.getBoolean("guard", true)
         forceKeys = prefs.getBoolean("force_keys", false)
+        okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
+        okHoldRepeat = prefs.getBoolean("ok_hold_repeat", false)
+        okHoldRepeatMs = prefs.getLong("ok_hold_repeat_ms", DEFAULT_OK_HOLD_REPEAT_MS)
         remoteNames.addAll(prefs.getStringSet("remote_names", emptySet()) ?: emptySet())
         onboarded = prefs.getBoolean("onboarded", false) || remoteNames.isNotEmpty()
         loadCustomKeys()
@@ -174,6 +194,23 @@ object TvHub : TvClient.Callback {
     fun setForceKeys(on: Boolean) {
         forceKeys = on
         prefs.edit().putBoolean("force_keys", on).apply()
+    }
+
+    /** Hold sensitivity: how long OK must be held before it's a hold, in milliseconds. */
+    fun setOkHoldMs(ms: Long) {
+        okHoldMs = ms
+        prefs.edit().putLong("ok_hold_ms", ms).apply()
+    }
+
+    fun setOkHoldRepeat(on: Boolean) {
+        okHoldRepeat = on
+        prefs.edit().putBoolean("ok_hold_repeat", on).apply()
+    }
+
+    /** Only matters while [okHoldRepeat] is on: how often OK is resent while held, in milliseconds. */
+    fun setOkHoldRepeatMs(ms: Long) {
+        okHoldRepeatMs = ms
+        prefs.edit().putLong("ok_hold_repeat_ms", ms).apply()
     }
 
     fun markOnboarded() {
@@ -271,25 +308,35 @@ object TvHub : TvClient.Callback {
         if (act != null && !held) act.go()
     }
 
-    /** The long-press button has been held long enough: runs its long action once. */
+    /**
+     * The long-press button has been held long enough: runs its long action once. If the action
+     * is [Act.longRepeat] (OK), that one run is just the start - it keeps being re-run every
+     * [Act.interval] until the button is released, which [stopHold] (called on release) stops.
+     */
     private fun onLongPress() {
         val act = longAct ?: return
         if (longFired) return
         longFired = true
         act.long?.invoke()
+        if (act.longRepeat) {
+            heldId = longId
+            repeater.start(initialDelay = act.interval, interval = act.interval) { act.long?.invoke() }
+        }
     }
 
     // ---- TV commands (used by the screen buttons, the remote and programmed buttons) ----
     fun pressKey(name: String) = client.button(name)
 
     /**
-     * OK held. LG's remote protocol has no separate "hold" message, so a hold is sent as one quick
-     * burst of OK that apps (YouTube, the launcher) read as a long press. It happens once per hold,
-     * not continuously while the finger stays down. Change this one function to remap the hold.
+     * Sends one OK press as part of a hold. LG's remote protocol has no "hold" message of its
+     * own, so by default a held OK is one soft press, the same as Back's hold sends one Exit.
+     * With Settings' "Keep sending OK while held" turned on, [onLongPress] (for the Bluetooth
+     * remote) and [DPadView] (for the on-screen pad) call this again every [okHoldRepeatMs] for
+     * as long as OK is held, instead of calling it only once. Change this one function to remap
+     * what a held OK sends.
      */
     fun okHold() {
         client.button("ENTER")
-        for (i in 1..3) handler.postDelayed({ client.button("ENTER") }, 40L * i)
     }
     fun volumeUp() = adjust("audio/volumeUp", "VOLUMEUP")
     fun volumeDown() = adjust("audio/volumeDown", "VOLUMEDOWN")
@@ -686,11 +733,11 @@ object TvHub : TvClient.Callback {
         settleLong() // another button was waiting to be a tap or a hold: it counts as a tap now
         stopHold()
         if (act.long != null) {
-            // Back: wait to see whether this is a tap (Back, sent on release) or a hold (Exit, sent once).
+            // Wait to see whether this is a tap (sent on release) or a hold (the long action).
             longId = id
             longAct = act
             longFired = false
-            handler.postDelayed(longTask, LONG_PRESS_MS)
+            handler.postDelayed(longTask, act.longDelay)
             return true
         }
         act.go()
@@ -715,13 +762,16 @@ object TvHub : TvClient.Callback {
 
     /**
      * Sends one TV remote key. The rules follow a real LG remote:
-     *  - OK is a tap = OK (sent on release). Held for [OK_HOLD_MS] it sends one hold instead,
-     *    once, however long you keep holding (no OK, OK, OK).
+     *  - OK is a tap = OK (sent on release). Held past [okHoldMs] (Settings' "Hold sensitivity")
+     *    it starts a hold: a single soft OK by default, or, with [okHoldRepeat] turned on in
+     *    Settings, OK resent every [okHoldRepeatMs] for as long as it's held.
      *  - Back is a tap = Back. Held for [LONG_PRESS_MS] it sends Exit once instead (no Back, Back, Back).
      *  - Arrows and the other keys keep repeating while held.
      */
     private fun tvKeyAct(name: String): Act = when (name) {
-        "ENTER" -> Act(false, long = { okHold() }) { client.button("ENTER") }
+        "ENTER" -> Act(false, long = { okHold() }, longDelay = okHoldMs, longRepeat = okHoldRepeat, interval = okHoldRepeatMs) {
+            client.button("ENTER")
+        }
         "BACK" -> Act(false, long = { client.button("EXIT") }) { client.button("BACK") }
         else -> Act(true) { client.button(name) }
     }
