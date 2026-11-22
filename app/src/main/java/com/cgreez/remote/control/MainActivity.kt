@@ -447,6 +447,9 @@ class MainActivity : Activity(), TvHub.Listener {
         padLp.gravity = Gravity.CENTER_HORIZONTAL
         col.addView(pad, padLp)
 
+        // Touchpad for the TV cursor (long-press menus)
+        col.addView(TouchpadView(this), lp(MATCH, dp(110), 0, 18))
+
         // Back / Home / Exit
         val nav = LinearLayout(this)
         nav.orientation = LinearLayout.HORIZONTAL

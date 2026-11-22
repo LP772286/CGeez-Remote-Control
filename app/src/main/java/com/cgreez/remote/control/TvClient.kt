@@ -245,6 +245,12 @@ class TvClient(private val cb: Callback) {
         return p.send("type:move\ndx:0\ndy:0\ndown:${if (down) 1 else 0}\n\n")
     }
 
+    /** A normal pointer click on the TV cursor. */
+    fun pointerClick(): Boolean {
+        val p = ptr ?: return false
+        return p.send("type:click\n\n")
+    }
+
     /** Moves the TV's pointer by (dx, dy); with [down] the pointer button is held while moving. */
     fun pointerMove(dx: Int, dy: Int, down: Boolean): Boolean {
         val p = ptr ?: return false

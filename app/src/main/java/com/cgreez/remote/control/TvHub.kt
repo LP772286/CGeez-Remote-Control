@@ -453,7 +453,7 @@ object TvHub : TvClient.Callback {
             handler.removeCallbacks(pointerKeep)
             handler.postDelayed({
                 if (ptrDown) {
-                    client.pointerHold(true)
+                    client.pointerMove(1, 0, true)
                     handler.postDelayed(pointerKeep, 100L)
                 }
             }, 80L)
@@ -461,6 +461,30 @@ object TvHub : TvClient.Callback {
         }
         client.button("ENTER")
         return false
+    }
+
+    // ---- Touchpad: move the TV cursor, click, or hold a click ----
+    fun padMove(dx: Int, dy: Int) {
+        client.pointerMove(dx, dy, ptrDown)
+    }
+
+    fun padClick() {
+        client.pointerClick()
+    }
+
+    fun padDown() {
+        if (ptrDown) return
+        if (client.pointerMove(1, 0, true)) {
+            ptrDown = true
+            handler.removeCallbacks(pointerSafety)
+            handler.postDelayed(pointerSafety, 15000L)
+            handler.removeCallbacks(pointerKeep)
+            handler.postDelayed(pointerKeep, 100L)
+        }
+    }
+
+    fun padUp() {
+        pointerUp()
     }
 
     /** The held OK is let go. */

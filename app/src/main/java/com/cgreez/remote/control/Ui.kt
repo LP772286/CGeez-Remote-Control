@@ -544,3 +544,94 @@ class DPadView(
         return true
     }
 }
+
+
+/**
+ * A touchpad for the TV's cursor: drag to move it, tap to click, hold still to press and hold
+ * (opens long-press menus once the cursor is on the item). Dragging while held moves it pressed.
+ */
+class TouchpadView(context: Context) : View(context) {
+    private var downX = 0f
+    private var downY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var remX = 0f
+    private var remY = 0f
+    private var moved = false
+    private var held = false
+    private val ui = Handler(Looper.getMainLooper())
+    private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Pal.muted
+        textAlign = Paint.Align.CENTER
+        textSize = context.dpf(12)
+    }
+    private val holdTask = Runnable {
+        if (!moved) {
+            held = true
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            TvHub.padDown()
+            pressDown(this, 0.97f)
+        }
+    }
+
+    init {
+        background = context.btnShape(Pal.surface, context.dpf(24))
+        contentDescription = "Touchpad"
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        canvas.drawText("Touchpad: drag to move, tap to click, hold to press", width / 2f, height / 2f + hint.textSize / 3f, hint)
+    }
+
+    override fun onDetachedFromWindow() {
+        ui.removeCallbacks(holdTask)
+        if (held) TvHub.padUp()
+        held = false
+        super.onDetachedFromWindow()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                downX = e.x; downY = e.y; lastX = e.x; lastY = e.y
+                remX = 0f; remY = 0f
+                moved = false; held = false
+                TvHub.padMove(1, 0) // wakes the TV cursor so it shows
+                TvHub.padMove(-1, 0)
+                ui.postDelayed(holdTask, maxOf(TvHub.okHoldMs, 350L))
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!moved && hypot(e.x - downX, e.y - downY) > context.dpf(8)) {
+                    moved = true
+                    if (!held) ui.removeCallbacks(holdTask)
+                }
+                if (moved || held) {
+                    remX += (e.x - lastX) * 2f
+                    remY += (e.y - lastY) * 2f
+                    val dx = remX.toInt()
+                    val dy = remY.toInt()
+                    if (dx != 0 || dy != 0) {
+                        remX -= dx
+                        remY -= dy
+                        TvHub.padMove(dx, dy)
+                    }
+                }
+                lastX = e.x; lastY = e.y
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                ui.removeCallbacks(holdTask)
+                if (held) {
+                    TvHub.padUp()
+                } else if (!moved && e.actionMasked == MotionEvent.ACTION_UP) {
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    TvHub.padClick()
+                }
+                held = false
+                pressUp(this)
+            }
+        }
+        return true
+    }
+}
