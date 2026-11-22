@@ -1,9 +1,15 @@
 package com.cgreez.remote.control
 
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.hardware.input.InputManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -63,6 +69,8 @@ object TvHub : TvClient.Callback {
     private val handler = Handler(Looper.getMainLooper())
     private val repeater = HoldRepeater(handler)
     private var heldId: String? = null
+    // The input device (the remote) whose button is being held; if it vanishes, the release is never coming.
+    private var downDev = -1
 
     /** How long a button with a long-press action (Back) must be held before the long action runs. */
     private const val LONG_PRESS_MS = 600L
@@ -175,12 +183,53 @@ object TvHub : TvClient.Callback {
         okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
         okHoldRepeat = prefs.getBoolean("ok_hold_repeat", false)
         okHoldRepeatMs = prefs.getLong("ok_hold_repeat_ms", DEFAULT_OK_HOLD_REPEAT_MS)
-        okHoldBt = prefs.getBoolean("ok_hold_bt", false)
+        okHoldBt = false // Bluetooth hold removed
+        prefs.edit().putBoolean("ok_hold_bt", false).apply()
         remoteNames.addAll(prefs.getStringSet("remote_names", emptySet()) ?: emptySet())
         onboarded = prefs.getBoolean("onboarded", false) || remoteNames.isNotEmpty()
         loadCustomKeys()
         apps = loadCachedApps()
-        if (okHoldBt) BtKeyboard.start(app)
+        watchReleaseLosers(app)
+        watchInputDevices(app)
+    }
+
+    /**
+     * If any input device disappears (for example the Bluetooth remote drops out mid-press), its
+     * key release will never arrive, so whatever was being held is let go now instead of
+     * repeating on its own.
+     */
+    /**
+     * Screen off or a Bluetooth device dropping can swallow the "released" event of a held button.
+     * Either one lets go of whatever is held right away, so nothing keeps pressing on its own.
+     */
+    private fun watchReleaseLosers(app: Context) {
+        val f = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        f.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                stopHold()
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                app.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                app.registerReceiver(r, f)
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun watchInputDevices(app: Context) {
+        val im = app.getSystemService(Context.INPUT_SERVICE) as? InputManager ?: return
+        im.registerInputDeviceListener(object : InputManager.InputDeviceListener {
+            override fun onInputDeviceAdded(deviceId: Int) {
+            }
+            override fun onInputDeviceChanged(deviceId: Int) {}
+            override fun onInputDeviceRemoved(deviceId: Int) {
+                stopHold()
+            }
+        }, handler)
     }
 
     fun saveSettings(newIp: String, newMac: String) {
@@ -226,14 +275,11 @@ object TvHub : TvClient.Callback {
 
     /** Turns the real Bluetooth OK hold on or off (see [okHoldBt]). */
     fun setOkHoldBt(on: Boolean) {
-        okHoldBt = on
-        prefs.edit().putBoolean("ok_hold_bt", on).apply()
-        if (on) BtKeyboard.start(appCtx) else BtKeyboard.stop()
+        okHoldBt = false // Bluetooth hold removed; the switch does nothing
     }
 
     /** (Re)starts the Bluetooth keyboard, for example right after the Bluetooth permission was granted. */
     fun startBt() {
-        if (okHoldBt) BtKeyboard.start(appCtx)
     }
 
     fun markOnboarded() {
@@ -308,9 +354,30 @@ object TvHub : TvClient.Callback {
         }
     }
 
+    /** Lets go of everything held, from outside this file (screen off, service interrupted...). */
+    fun releaseAll() {
+        stopHold()
+    }
+
+    /** False when the device that pressed the held button is gone (remote dropped): no release will come. */
+    private fun holdAlive(): Boolean = downDev < 0 || InputDevice.getDevice(downDev) != null
+
+    private var ptrDown = false
+    private val pointerSafety = Runnable { pointerUp() }
+
+    /** Lets go of a held pointer click. Sent twice so one lost message can't leave it held on the TV. */
+    private fun pointerUp() {
+        handler.removeCallbacks(pointerSafety)
+        if (!ptrDown) return
+        ptrDown = false
+        client.pointerHold(false)
+        handler.postDelayed({ if (!ptrDown) client.pointerHold(false) }, 150L)
+    }
+
     private fun stopHold() {
-        BtKeyboard.release()
+        pointerUp()
         repeater.stop()
+        downDev = -1
         heldId = null
         handler.removeCallbacks(longTask)
         longId = null
@@ -323,7 +390,7 @@ object TvHub : TvClient.Callback {
      * came first). A tap runs its normal action now; a hold already ran its long action.
      */
     private fun settleLong() {
-        BtKeyboard.release() // a real Bluetooth hold ends the moment the button is let go
+        pointerUp() // a held OK ends the moment the button is let go
         handler.removeCallbacks(longTask)
         val act = longAct
         val held = longFired
@@ -341,19 +408,35 @@ object TvHub : TvClient.Callback {
     private fun onLongPress() {
         val act = longAct ?: return
         if (longFired) return
+        if (!holdAlive()) { // the remote dropped while the button was down: nothing to hold
+            stopHold()
+            return
+        }
         longFired = true
         act.long?.invoke()
         if (act.longRepeat) {
             heldId = longId
-            repeater.start(initialDelay = act.interval, interval = act.interval) { act.long?.invoke() }
+            repeater.start(initialDelay = act.interval, interval = act.interval) {
+                if (holdAlive()) act.long?.invoke() else stopHold()
+            }
         }
     }
 
     // ---- TV commands (used by the screen buttons, the remote and programmed buttons) ----
     fun pressKey(name: String) = client.button(name)
 
+    /** True while the Bluetooth remote (or another external keyboard) is connected to the phone. */
+    fun remoteConnected(): Boolean {
+        for (id in InputDevice.getDeviceIds()) {
+            val d = InputDevice.getDevice(id) ?: continue
+            if (!likelyExternal(d)) continue
+            if (remoteNames.isEmpty() || isRemote(d)) return true
+        }
+        return false
+    }
+
     /** True when a held OK would go out as a real Bluetooth key hold right now. */
-    fun btHoldReady(): Boolean = okHoldBt && BtKeyboard.connected
+    fun btHoldReady(): Boolean = false
 
     /**
      * A held OK begins. LG's Wi-Fi remote protocol has no "key down / key up", so over Wi-Fi a
@@ -367,14 +450,21 @@ object TvHub : TvClient.Callback {
      * the Bluetooth remote) and [DPadView] (for the on-screen pad).
      */
     fun okHoldStart(): Boolean {
-        if (okHoldBt && BtKeyboard.press()) return true
+        // Long OK: press and hold the TV's pointer click until the button is let go. With Settings'
+        // "Keep sending OK while held" on, the old repeated soft OK is used instead.
+        if (!okHoldRepeat && client.pointerHold(true)) {
+            ptrDown = true
+            handler.removeCallbacks(pointerSafety)
+            handler.postDelayed(pointerSafety, 8000L)
+            return true
+        }
         client.button("ENTER")
         return false
     }
 
     /** The held OK is let go: ends the real Bluetooth hold. Does nothing for a Wi-Fi hold. */
     fun okHoldEnd() {
-        BtKeyboard.release()
+        pointerUp()
     }
     fun volumeUp() = adjust("audio/volumeUp", "VOLUMEUP")
     fun volumeDown() = adjust("audio/volumeDown", "VOLUMEDOWN")
@@ -735,6 +825,18 @@ object TvHub : TvClient.Callback {
             lastRemoteKeyAt = SystemClock.uptimeMillis()
             if (isPowerKey(code)) lastRemotePowerAt = lastRemoteKeyAt
         }
+        // A release must always be seen while something is held, before any other check can skip
+        // it (remote briefly reconnected under a new id, TV link dropped, settings changed...).
+        // Otherwise the hold keeps repeating on its own.
+        if (!isDown && (heldId != null || longId != null)) {
+            val upId = keyId(event)
+            val mine = heldId == upId || longId == upId
+            if (heldId == upId) stopHold()
+            if (longId == upId) settleLong()
+            // Taken only when it was the remote's button (or the remote changed its name on reconnect).
+            if (mine && (remote || dev == null || likelyExternal(dev))) return true
+            if (remote || dev == null) return true
+        }
         if (learning || !remote) return false
         if (isDown && code == KeyEvent.KEYCODE_VOLUME_DOWN) lastRemoteVolDownAt = SystemClock.uptimeMillis()
 
@@ -770,6 +872,7 @@ object TvHub : TvClient.Callback {
         val act = resolve(event) ?: return true
         settleLong() // another button was waiting to be a tap or a hold: it counts as a tap now
         stopHold()
+        downDev = event.deviceId
         if (act.long != null) {
             // Wait to see whether this is a tap (sent on release) or a hold (the long action).
             longId = id
@@ -781,7 +884,9 @@ object TvHub : TvClient.Callback {
         act.go()
         if (act.repeat) {
             heldId = id
-            repeater.start(initialDelay = act.delay, interval = act.interval, action = act.go)
+            repeater.start(initialDelay = act.delay, interval = act.interval) {
+                if (holdAlive()) act.go() else stopHold()
+            }
         }
         return true
     }

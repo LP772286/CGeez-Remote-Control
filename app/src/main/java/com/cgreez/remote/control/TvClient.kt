@@ -230,7 +230,19 @@ class TvClient(private val cb: Callback) {
             }
             return
         }
+        // If the Wi-Fi stalls, presses pile up and would all arrive in a burst after the button
+        // was let go, which looks like the remote pressing on its own. Drop them instead.
+        if (p.queueSize() > 150L) return
         p.send("type:button\nname:$name\n\n")
+    }
+
+    /**
+     * Presses (true) or releases (false) the TV's pointer click, as a mouse button held down.
+     * This is the only "held" input LG's Wi-Fi channel has. Returns false when it couldn't be sent.
+     */
+    fun pointerHold(down: Boolean): Boolean {
+        val p = ptr ?: return false
+        return p.send("type:move\ndx:0\ndy:0\ndown:${if (down) 1 else 0}\n\n")
     }
 
     /** Shows a pop-up message on the TV screen. */
