@@ -22,7 +22,7 @@ An Android app that turns your phone into a background remote for **LG webOS TVs
 
 ## Setup
 
-1. Install the APK and open the app.
+1. Download the latest APK from the [Releases](../../releases) page, install it and open the app.
 2. Enter the TV's IP address (TV and phone on the same Wi-Fi) and connect.
 3. Accept the pairing prompt on the TV.
 4. Enable the app's **Accessibility service** in Android settings. This is how it reads remote keys while the phone is locked.
@@ -32,9 +32,7 @@ An Android app that turns your phone into a background remote for **LG webOS TVs
 
 ## Build
 
-The easy way is GitHub Actions: push to the repo and download **CGeez-RC-apk** from the run's Artifacts in the Actions tab.
-
-To build locally you need JDK 17, the Android SDK (platform 34) and Gradle 8.7:
+To build it yourself you need JDK 17, the Android SDK (platform 34) and Gradle 8.7:
 
 ```bash
 gradle :app:assembleDebug
