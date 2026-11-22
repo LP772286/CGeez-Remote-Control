@@ -5,7 +5,7 @@ An Android app that turns your phone into a background remote for **LG webOS TVs
 > Unofficial. Not affiliated with or endorsed by LG. "LG" and "webOS" are trademarks of LG Electronics.
 
 - Package: `com.cgreez.remote.control`
-- Version: 6.1
+- Version: 6.6
 - Android 8.0+ (API 26)
 
 ## Features
@@ -28,6 +28,7 @@ An Android app that turns your phone into a background remote for **LG webOS TVs
 4. Enable the app's **Accessibility service** in Android settings. This is how it reads remote keys while the phone is locked.
 5. Choose your remote in the app (use the learn function and press a key on it).
 6. Turn off battery optimization for the app if your phone kills background apps.
+7. Optional, for a real OK hold (long-press menus): open Settings > OK hold, turn on "Real hold over Bluetooth", tap "Make phone visible", then pair the phone from the TV's Bluetooth settings.
 
 ## Build
 
