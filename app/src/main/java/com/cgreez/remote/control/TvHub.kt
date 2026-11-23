@@ -176,7 +176,7 @@ object TvHub : TvClient.Callback {
         guardScreen = prefs.getBoolean("guard", true)
         forceKeys = prefs.getBoolean("force_keys", false)
         okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
-        okHoldMode = prefs.getInt("ok_hold_mode2", 1)
+        okHoldMode = 2 // OK hold removed: a held OK is just an OK
         okHoldRepeatMs = prefs.getLong("ok_hold_pace", DEFAULT_OK_HOLD_REPEAT_MS)
         themeDark = prefs.getBoolean("theme_dark", true)
         themeAccent = prefs.getString("theme_accent", "blue") ?: "blue"
@@ -459,7 +459,8 @@ object TvHub : TvClient.Callback {
             }, 80L)
             return true
         }
-        client.button("ENTER")
+        // A hold sends a pointer click, so the TV cursor shows the red pressed state.
+        if (!client.pointerClick()) client.button("ENTER")
         return false
     }
 

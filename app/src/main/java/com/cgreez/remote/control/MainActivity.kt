@@ -108,10 +108,26 @@ class MainActivity : Activity(), TvHub.Listener {
         }
     }
 
+    /** Switches the home-screen icon to the chosen accent colour (one launcher alias per colour). */
+    private fun applyLauncherIcon(accent: String) {
+        try {
+            for (n in Pal.accentNames) {
+                val cn = android.content.ComponentName(this, "com.cgreez.remote.control.Icon${n.replaceFirstChar { it.uppercase() }}")
+                val want = if (n == accent) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                if (packageManager.getComponentEnabledSetting(cn) != want) {
+                    packageManager.setComponentEnabledSetting(cn, want, PackageManager.DONT_KILL_APP)
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
     /** Saves the theme and rebuilds the screens with a soft cross-fade. */
     private fun changeTheme(dark: Boolean, accent: String) {
         if (dark == TvHub.themeDark && accent == TvHub.themeAccent) return
         TvHub.setTheme(dark, accent)
+        applyLauncherIcon(accent)
         reopenSettings = true
         recreate()
         @Suppress("DEPRECATION")
@@ -701,52 +717,6 @@ class MainActivity : Activity(), TvHub.Listener {
         optCard.addView(forceRow, lp(MATCH, WRAP, 16))
         optCard.addView(keepRow, lp(MATCH, WRAP, 16))
         col.addView(optCard, lp(MATCH, WRAP, 0, 14))
-
-        // OK hold
-        val okCard = card()
-        okCard.addView(label("OK hold", 14f, Pal.text, true))
-        okCard.addView(
-            label(
-                "Holding OK on the D-pad or your Bluetooth remote is how you open YouTube's or " +
-                    "the Home screen's long-press menu. If it doesn't open, try another mode.",
-                12f, Pal.muted
-            ),
-            lp(MATCH, WRAP, 6, 12)
-        )
-        fun secs(ms: Int) = String.format(Locale.US, "%.2fs", ms / 1000f)
-        val modeInfo = arrayOf(
-            "Sends OK again and again very fast while you hold. Can select things repeatedly.",
-            "Wakes the TV cursor and holds a pointer click. Best for opening long-press menus.",
-            "A hold sends just one OK."
-        )
-        val modeDesc = label(modeInfo[TvHub.okHoldMode.coerceIn(0, 2)], 12f, Pal.muted)
-        val (paceRow, paceBar) = seekRow(
-            "Repeat speed",
-            "How often OK is resent while held. Lower is faster.",
-            min = 30, max = 300, step = 10, initial = TvHub.okHoldRepeatMs.toInt(), valueLabel = ::secs
-        ) { v -> TvHub.setOkHoldRepeatMs(v.toLong()) }
-        fun showPace(on: Boolean) {
-            paceBar.isEnabled = on
-            paceRow.animate().alpha(if (on) 1f else 0.4f).setDuration(200).start()
-        }
-        okCard.addView(
-            segmented(listOf("Fast repeat", "Pointer", "Single"), TvHub.okHoldMode.coerceIn(0, 2)) { i ->
-                TvHub.setOkHoldMode(i)
-                modeDesc.text = modeInfo[i]
-                showPace(i == 0)
-            },
-            lp(MATCH, WRAP, 0, 8)
-        )
-        okCard.addView(modeDesc, lp(MATCH, WRAP, 0, 16))
-        val (sensRow, _) = seekRow(
-            "Hold sensitivity",
-            "How long OK must be held before it counts as a hold rather than a tap. Lower is more sensitive.",
-            min = 150, max = 900, step = 50, initial = TvHub.okHoldMs.toInt(), valueLabel = ::secs
-        ) { v -> TvHub.setOkHoldMs(v.toLong()) }
-        okCard.addView(sensRow, lp(MATCH, WRAP, 0, 16))
-        okCard.addView(paceRow)
-        showPace(TvHub.okHoldMode == 0)
-        col.addView(okCard, lp(MATCH, WRAP, 0, 14))
 
         // TV
         val tvCard = card()
