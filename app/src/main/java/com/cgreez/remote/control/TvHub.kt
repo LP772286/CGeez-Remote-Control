@@ -118,6 +118,11 @@ object TvHub : TvClient.Callback {
         private set
     @Volatile var themeAccent = "blue"
         private set
+    /** Learned screen spot (pixels from the TV's top-left corner) that a held OK moves the cursor to; -1 = none. */
+    @Volatile var holdX = -1
+        private set
+    @Volatile var holdY = -1
+        private set
     @Volatile var onboarded = false
         private set
     @Volatile var lastRemoteKeyAt = 0L
@@ -178,6 +183,8 @@ object TvHub : TvClient.Callback {
         okHoldMs = prefs.getLong("ok_hold_ms", DEFAULT_OK_HOLD_MS)
         okHoldMode = 2 // OK hold removed: a held OK is just an OK
         okHoldRepeatMs = prefs.getLong("ok_hold_pace", DEFAULT_OK_HOLD_REPEAT_MS)
+        holdX = prefs.getInt("spot_x", -1)
+        holdY = prefs.getInt("spot_y", -1)
         themeDark = prefs.getBoolean("theme_dark", true)
         themeAccent = prefs.getString("theme_accent", "blue") ?: "blue"
         remoteNames.addAll(prefs.getStringSet("remote_names", emptySet()) ?: emptySet())
@@ -444,6 +451,12 @@ object TvHub : TvClient.Callback {
      * Mode 2: one single OK. Returns true only when a real pointer hold started.
      */
     fun okHoldStart(): Boolean {
+        if (holdX >= 0 && slamCorner()) {
+            // Learned spot: jump the cursor to it, then press and hold the pointer there.
+            moveTo(holdX, holdY)
+            padDown()
+            return true
+        }
         if (okHoldMode == 1 && client.pointerMove(1, 0, false)) {
             // Wake the TV cursor first, then press and hold the pointer button on it.
             client.pointerMove(-1, 0, false)
@@ -459,14 +472,65 @@ object TvHub : TvClient.Callback {
             }, 80L)
             return true
         }
-        // A hold sends a pointer click, so the TV cursor shows the red pressed state.
-        if (!client.pointerClick()) client.button("ENTER")
+        client.button("ENTER")
         return false
     }
 
     // ---- Touchpad: move the TV cursor, click, or hold a click ----
+    private var learnOn = false
+    private var accX = 0
+    private var accY = 0
+
     fun padMove(dx: Int, dy: Int) {
         client.pointerMove(dx, dy, ptrDown)
+        if (learnOn && !ptrDown) {
+            accX = maxOf(0, accX + dx)
+            accY = maxOf(0, accY + dy)
+        }
+    }
+
+    /** Pushes the TV cursor into the top-left corner, a known starting point. */
+    private fun slamCorner(): Boolean {
+        if (!client.pointerMove(-600, -600, false)) return false
+        repeat(5) { client.pointerMove(-600, -600, false) }
+        return true
+    }
+
+    private fun moveTo(x: Int, y: Int) {
+        var rx = x
+        var ry = y
+        while (rx > 0 || ry > 0) {
+            val sx = minOf(rx, 40)
+            val sy = minOf(ry, 40)
+            client.pointerMove(sx, sy, false)
+            rx -= sx
+            ry -= sy
+        }
+    }
+
+    fun hasSpot(): Boolean = holdX >= 0
+
+    /** Starts teaching the hold spot: the cursor jumps to the corner, then padMove tracks where you drag it. */
+    fun beginSpotLearn(): Boolean {
+        if (!slamCorner()) return false
+        learnOn = true
+        accX = 0
+        accY = 0
+        return true
+    }
+
+    fun saveSpot() {
+        learnOn = false
+        holdX = accX
+        holdY = accY
+        prefs.edit().putInt("spot_x", holdX).putInt("spot_y", holdY).apply()
+    }
+
+    fun clearSpot() {
+        learnOn = false
+        holdX = -1
+        holdY = -1
+        prefs.edit().remove("spot_x").remove("spot_y").apply()
     }
 
     fun padClick() {

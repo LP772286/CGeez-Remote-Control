@@ -464,7 +464,38 @@ class MainActivity : Activity(), TvHub.Listener {
         col.addView(pad, padLp)
 
         // Touchpad for the TV cursor (long-press menus)
-        col.addView(TouchpadView(this), lp(MATCH, dp(110), 0, 18))
+        col.addView(TouchpadView(this), lp(MATCH, dp(110), 0, 10))
+        val spotRow = LinearLayout(this)
+        spotRow.orientation = LinearLayout.HORIZONTAL
+        var learningSpot = false
+        var spotBtn: TextView? = null
+        spotBtn = pillButton(if (TvHub.hasSpot()) "Re-learn hold spot" else "Learn hold spot", Pal.key, Pal.accent, 42, 13f) {
+            if (!learningSpot) {
+                if (TvHub.beginSpotLearn()) {
+                    learningSpot = true
+                    spotBtn?.text = "Save hold spot"
+                    Toast.makeText(this, "Cursor sent to the corner. Drag it onto the item with the touchpad, then tap Save hold spot.", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Not connected to the TV yet.", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                learningSpot = false
+                TvHub.saveSpot()
+                spotBtn?.text = "Re-learn hold spot"
+                Toast.makeText(this, "Saved. Holding OK now presses there.", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val clearBtn = pillButton("Clear", Pal.key, Pal.danger, 42, 13f) {
+            learningSpot = false
+            TvHub.clearSpot()
+            spotBtn?.text = "Learn hold spot"
+            Toast.makeText(this, "Hold spot cleared. OK hold is a normal OK again.", Toast.LENGTH_SHORT).show()
+        }
+        val sp1 = LinearLayout.LayoutParams(0, WRAP, 2f)
+        sp1.rightMargin = dp(6)
+        spotRow.addView(spotBtn, sp1)
+        spotRow.addView(clearBtn, LinearLayout.LayoutParams(0, WRAP, 1f))
+        col.addView(spotRow, lp(MATCH, WRAP, 0, 18))
 
         // Back / Home / Exit
         val nav = LinearLayout(this)
