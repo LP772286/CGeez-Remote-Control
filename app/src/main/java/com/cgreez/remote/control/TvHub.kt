@@ -455,8 +455,13 @@ object TvHub : TvClient.Callback {
             // Learned spot: jump the cursor to it, then press and hold the pointer there.
             moveTo(holdX, holdY)
             padDown()
+            onStatus("Hold: cursor sent to spot ($holdX, $holdY) and pressed", false)
             return true
         }
+        onStatus(
+            if (holdX < 0) "Hold: no spot saved, sent a normal OK. Use Learn hold spot." else "Hold: TV pointer not ready, sent a normal OK.",
+            false
+        )
         if (okHoldMode == 1 && client.pointerMove(1, 0, false)) {
             // Wake the TV cursor first, then press and hold the pointer button on it.
             client.pointerMove(-1, 0, false)
