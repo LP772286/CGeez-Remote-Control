@@ -454,8 +454,8 @@ object TvHub : TvClient.Callback {
         if (holdX >= 0 && slamCorner()) {
             // Learned spot: jump the cursor to it, then press and hold the pointer there.
             moveTo(holdX, holdY)
-            padDown()
-            onStatus("Hold: cursor sent to spot ($holdX, $holdY) and pressed", false)
+            client.pointerClick()
+            onStatus("Hold: cursor sent to spot ($holdX, $holdY) and clicked", false)
             return true
         }
         onStatus(
